@@ -49,10 +49,67 @@ def course_slug(course_identifier: str | int, course_code: str | None = None) ->
     return slug(course_code or str(course_identifier))
 
 
+def _course_candidates(
+    course_identifier: str | int, course_code: str | None = None
+) -> list[str]:
+    """Every directory name this course could already live under.
+
+    Tools sometimes know the course code and sometimes only the id, so the same
+    course can be named two ways. Both are checked before a new directory is
+    created, otherwise one call would write the brief under ``cs225`` and the
+    next would put the draft under ``225``.
+    """
+    names: list[str] = []
+    for value in (course_code, course_identifier):
+        if value is None:
+            continue
+        name = slug(value)
+        if name and name not in names:
+            names.append(name)
+    return names
+
+
 def course_dir(course_identifier: str | int, course_code: str | None = None) -> Path:
-    path = data_dir() / "courses" / course_slug(course_identifier, course_code)
+    """The course's workspace directory, reusing an existing one under either name."""
+    root = data_dir() / "courses"
+    names = _course_candidates(course_identifier, course_code) or ["course"]
+    for name in names:
+        path = root / name
+        if path.is_dir():
+            return path
+    path = root / names[0]
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def find_assignment_dir(
+    course_identifier: str | int,
+    assignment_id: str | int,
+    course_code: str | None = None,
+) -> Path | None:
+    """Locate an existing assignment folder by its id prefix, without creating one.
+
+    Callers that only know the assignment id (submitting an approved draft,
+    checking style) must not invent a second folder next to the real one.
+    """
+    prefix = slug(str(assignment_id), 12)
+    root = data_dir() / "courses"
+    for name in _course_candidates(course_identifier, course_code):
+        base = root / name
+        if not base.is_dir():
+            continue
+        found = sorted(path for path in base.glob(f"{prefix}-*") if path.is_dir())
+        if found:
+            return found[0]
+
+    # The folder may have been created under the course's other name. Accept a
+    # match from elsewhere only when it is unambiguous.
+    elsewhere = sorted(
+        path for path in root.glob(f"*/{prefix}-*") if path.is_dir()
+    )
+    if len(elsewhere) == 1:
+        return elsewhere[0]
+    return None
 
 
 def assignment_dir(
@@ -61,7 +118,11 @@ def assignment_dir(
     title: str | None = None,
     course_code: str | None = None,
 ) -> Path:
-    """Per-assignment workspace directory."""
+    """Per-assignment workspace directory, reusing an existing one if present."""
+    existing = find_assignment_dir(course_identifier, assignment_id, course_code)
+    if existing is not None:
+        (existing / "drafts").mkdir(exist_ok=True)
+        return existing
     label = f"{slug(str(assignment_id), 12)}-{slug(title or 'assignment', 40)}"
     path = course_dir(course_identifier, course_code) / label
     path.mkdir(parents=True, exist_ok=True)
@@ -280,23 +341,6 @@ def list_drafts(
             }
         )
     return sorted(found, key=lambda item: item["updated"], reverse=True)
-
-
-def find_assignment_dir(
-    course_identifier: str | int,
-    assignment_id: str | int,
-    course_code: str | None = None,
-) -> Path | None:
-    """Locate an existing assignment folder by its id prefix, without creating one.
-
-    Callers that only know the assignment id (submitting an approved draft,
-    checking style) must not invent a second folder next to the real one.
-    """
-    prefix = slug(str(assignment_id), 12)
-    for candidate in sorted(course_dir(course_identifier, course_code).glob(f"{prefix}-*")):
-        if candidate.is_dir():
-            return candidate
-    return None
 
 
 def read_draft(

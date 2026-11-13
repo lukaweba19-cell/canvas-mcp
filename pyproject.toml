@@ -36,6 +36,16 @@ dependencies = [
 ]
 
 
+[project.optional-dependencies]
+# Scanned PDFs and screenshot decks have no text layer. This extra adds a
+# pip-only OCR pair (pypdfium2 renders, rapidocr reads) so those files become
+# readable. Without it, extraction still works and says exactly what is missing.
+ocr = [
+    "pypdfium2>=4",
+    "rapidocr-onnxruntime>=1.3",
+]
+
+
 [project.urls]
 Homepage = "https://github.com/vishalsachdev/canvas-mcp"
 Repository = "https://github.com/vishalsachdev/canvas-mcp"

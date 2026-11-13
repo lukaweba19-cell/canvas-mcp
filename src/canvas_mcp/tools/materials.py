@@ -8,13 +8,14 @@ so a 60-slide deck never floods the conversation.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
 from fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 
-from ..core import extract, student_store
+from ..core import extract, ocr, student_store
 from ..core.cache import get_course_code, get_course_id
 from ..core.client import (
     canvas_authenticated_client,
@@ -64,6 +65,86 @@ async def _download_course_file_bytes(download_url: str) -> tuple[bytes | None, 
         return None, f"{type(exc).__name__}: {exc}"
 
 
+
+_WORD = re.compile(r"[a-z0-9]{4,}")
+
+
+def _file_name(entry: dict[str, Any]) -> str:
+    return str(entry.get("display_name") or entry.get("filename") or "unknown")
+
+
+def _matching_transcript(
+    title: str, transcripts: list[dict[str, Any]]
+) -> dict[str, Any] | None:
+    """Best-effort match of a video/LTI item to a caption or transcript file.
+
+    Canvas does not link a Panopto item to its .vtt file, but instructors almost
+    always name them alike ("Week 3 Lecture" / "week3-lecture.vtt"), so a word
+    overlap is the only signal available. One shared word is enough; more wins.
+    """
+    wanted = set(_WORD.findall(title.lower()))
+    if not wanted:
+        return None
+    best: tuple[int, dict[str, Any]] | None = None
+    for entry in transcripts:
+        shared = wanted & set(_WORD.findall(_file_name(entry).lower()))
+        if shared and (best is None or len(shared) > best[0]):
+            best = (len(shared), entry)
+    return best[1] if best else None
+
+
+def _item_guidance(
+    item: dict[str, Any],
+    files_by_id: dict[str, dict[str, Any]],
+    transcripts: list[dict[str, Any]],
+) -> str:
+    """How readable one module item is, and what to call for it.
+
+    Nothing is labelled readable unless text can actually be produced: a File is
+    checked against its extension, and an LTI/external item is never readable.
+    """
+    item_type = item.get("type", "Unknown")
+    title = str(item.get("title") or "Untitled")
+
+    if item_type == "SubHeader":
+        return "heading only"
+    if item_type == "Page":
+        return "read_page_text"
+    if item_type == "Assignment":
+        return "get_assignment_details / start_assignment_work"
+    if item_type == "Discussion":
+        return "list_discussion_entries"
+    if item_type == "Quiz":
+        return "NOT readable — quizzes cannot be read or taken here; open it in Canvas"
+    if item_type == "File":
+        entry = files_by_id.get(str(item.get("content_id")))
+        if entry is None:
+            return "read_course_material (file not in the course file list — try it)"
+        name = _file_name(entry)
+        if extract.is_readable(name):
+            return f"read_course_material — readable ({extract.Path(name).suffix.lower()})"
+        return (
+            f"NOT readable as text ({extract.Path(name).suffix.lower() or 'no extension'}); "
+            "download it with download_course_file and open it"
+        )
+    if item_type in ("ExternalTool", "ExternalUrl"):
+        transcript = _matching_transcript(title, transcripts)
+        if transcript is not None:
+            return (
+                "embedded video/LTI — the item itself is NOT readable, but a "
+                f"transcript exists: read_course_material(file_id={transcript.get('id')}) "
+                f"for {_file_name(transcript)}"
+            )
+        url = item.get("external_url") or item.get("url")
+        return (
+            "embedded video/LTI — NOT readable as text and no transcript in course "
+            "files; open "
+            + (str(url) if url else "it in Canvas")
+            + " and read the slides or notes posted alongside it"
+        )
+    return "unknown item type — not readable as text; open it in Canvas"
+
+
 def register_material_tools(mcp: FastMCP) -> None:
     """Register course-material reading tools."""
 
@@ -72,15 +153,26 @@ def register_material_tools(mcp: FastMCP) -> None:
     async def get_course_content_map(course_identifier: str | int) -> str:
         """Map everything readable in a course, so you know what you can study.
 
-        Lists each module item with its type and the tool that reads it, then
-        lists course files with whether their text can be extracted. Use this
-        before building a study guide.
+        Lists each module item with its type and exactly what reads it, then the
+        course files with whether their text can be extracted. Items that cannot
+        produce text (quizzes, Panopto/Kaltura videos, external links) are marked
+        NOT readable, with the concrete next action. Use this before building a
+        study guide.
 
         Args:
             course_identifier: Course code or Canvas ID
         """
         course_id = await get_course_id(course_identifier)
         course_display = await get_course_code(course_id) or course_identifier
+
+        files = await fetch_all_paginated_results(
+            f"/courses/{course_id}/files", {"per_page": 100}
+        )
+        file_list = files if isinstance(files, list) else []
+        files_by_id = {str(entry.get("id")): entry for entry in file_list}
+        transcripts = [
+            entry for entry in file_list if extract.is_transcript(_file_name(entry))
+        ]
 
         modules = await fetch_all_paginated_results(
             f"/courses/{course_id}/modules", {"per_page": 100, "include[]": ["items"]}
@@ -92,51 +184,49 @@ def register_material_tools(mcp: FastMCP) -> None:
         elif not modules:
             lines.append("No modules in this course.")
         else:
-            readable_by_type = {
-                "Page": "read_page_text",
-                "File": "read_course_material",
-                "Assignment": "get_assignment_details",
-                "Discussion": "list_discussion_entries",
-                "Quiz": "not supported (quizzes cannot be read or taken)",
-                "ExternalUrl": "not readable (opens outside Canvas)",
-                "ExternalTool": "not readable (LTI tool, e.g. Panopto/Gradescope)",
-                "SubHeader": "heading only",
-            }
             for module in modules:
                 lines.append(
                     f"\n## {fence_untrusted_inline(module.get('name', 'Untitled'), 'module name')}"
                 )
                 for item in module.get("items", []):
-                    item_type = item.get("type", "Unknown")
-                    title = item.get("title", "Untitled")
                     ids = []
                     if item.get("content_id"):
                         ids.append(f"content_id={item['content_id']}")
                     if item.get("page_url"):
                         ids.append(f"page_url={item['page_url']}")
-                    if item.get("external_url"):
-                        ids.append("external link")
-                    hint = readable_by_type.get(item_type, "unknown")
                     lines.append(
-                        f"- [{item_type}] {fence_untrusted_inline(title, 'module item title')}"
-                        f" ({', '.join(ids) or 'no content id'}) -> {hint}"
+                        f"- [{item.get('type', 'Unknown')}] "
+                        f"{fence_untrusted_inline(item.get('title', 'Untitled'), 'module item title')}"
+                        f" ({', '.join(ids) or 'no content id'}) -> "
+                        f"{_item_guidance(item, files_by_id, transcripts)}"
                     )
 
-        files = await fetch_all_paginated_results(
-            f"/courses/{course_id}/files", {"per_page": 100}
-        )
         lines.append("\n## Course files")
         if isinstance(files, dict) and "error" in files:
             lines.append(f"Could not list files: {files['error']}")
-        elif not files:
+        elif not file_list:
             lines.append("No files.")
         else:
-            for file in files:
-                name = file.get("display_name") or file.get("filename", "unknown")
-                readable = "readable" if extract.is_readable(name) else "NOT readable as text"
+            for entry in file_list:
+                name = _file_name(entry)
+                if extract.is_transcript(name):
+                    readable = "readable (captions/transcript)"
+                elif extract.is_readable(name):
+                    readable = "readable"
+                else:
+                    readable = "NOT readable as text — download_course_file and open it"
                 lines.append(
-                    f"- file_id={file.get('id')} {fence_untrusted_inline(name, 'file name')}"
+                    f"- file_id={entry.get('id')} {fence_untrusted_inline(name, 'file name')}"
                     f" ({readable})"
+                )
+
+        if transcripts:
+            lines.append("\n## Captions and transcripts")
+            for entry in transcripts:
+                lines.append(
+                    f"- file_id={entry.get('id')} "
+                    f"{fence_untrusted_inline(_file_name(entry), 'transcript name')} — "
+                    "read_course_material returns the spoken text without timestamps"
                 )
 
         return "\n".join(lines)
@@ -243,12 +333,28 @@ def register_material_tools(mcp: FastMCP) -> None:
             available = ", ".join(item["label"] for item in record.get("sections", [])[:15])
             return f"No section '{section}'. Available: {available}"
 
+        if not found.text.strip():
+            hint = (
+                "This section has no text layer: it is an image, a scanned page, or empty. "
+            )
+            if ocr.is_available():
+                hint += (
+                    "OCR is installed but found nothing readable here — re-run "
+                    "read_course_material with refresh=true, or view the page in Canvas."
+                )
+            else:
+                hint += f"It was not read. {ocr.unavailable_reason()}"
+            return (
+                f"{fence_untrusted_inline(record.get('filename', 'file'), 'file name')} "
+                f"— {found.label}\n\n{hint}"
+            )
+
         body = found.text[:_MAX_SECTION_RETURN]
         suffix = "" if len(found.text) <= _MAX_SECTION_RETURN else "\n...[section truncated]"
         return (
             f"{fence_untrusted_inline(record.get('filename', 'file'), 'file name')} "
             f"— {found.label}\n\n"
-            + fence_untrusted(body or "(no text on this section)", "course material")
+            + fence_untrusted(body, "course material")
             + suffix
         )
 
@@ -313,8 +419,19 @@ def _describe_cached(record: dict[str, Any], cache_path: str) -> str:
     if record.get("warnings"):
         lines.append("Warnings:")
         lines.extend(f"  - {warning}" for warning in record["warnings"])
+    unreadable = extracted.unreadable
+    if unreadable:
+        lines.append(
+            f"\nSections with no text ({len(unreadable)}): " + ", ".join(unreadable[:12])
+        )
+        if not ocr.is_available():
+            lines.append("  " + ocr.unavailable_reason())
+
     if not extracted.word_count:
-        lines.append("\nNo readable text was extracted from this file.")
+        lines.append(
+            "\nNo readable text was extracted from this file. It is image-only, so the "
+            "text has to come from OCR (or from a transcript, if one is posted)."
+        )
         return "\n".join(lines)
 
     toc_lines = extracted.toc(max_labels=_MAX_TOC_LINES).splitlines()

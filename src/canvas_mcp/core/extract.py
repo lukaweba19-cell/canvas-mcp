@@ -6,14 +6,21 @@ are usually the professor's own explanation of what matters) once, and caches
 the result so repeat reads cost nothing.
 
 Formats:
-- PDF          -> one section per page, via pypdf
-- PPTX/PPTM    -> one section per slide + its notes
-- DOCX         -> one section for the document
-- XLSX         -> one section per sheet
-- IPYNB        -> one section per cell
-- HTML/MD/TXT  -> one section
+- PDF               -> one section per page, via pypdf
+- PPTX/PPTM         -> one section per slide + its notes
+- DOCX              -> one section for the document
+- XLSX              -> one section per sheet
+- IPYNB             -> one section per cell
+- VTT/SRT           -> one section per transcript (captions, lecture transcripts)
+- HTML/MD/TXT/code  -> one section
 Everything else (images, audio, video, archives) is reported as unreadable
 rather than silently returning garbage.
+
+Image-only content (a scanned PDF, a deck exported as screenshots) goes through
+``core.ocr`` when the optional extra is installed. When it is not, the section
+keeps a label with no text and the caller gets a warning that counts the
+affected pages and names the install command — never a blank result passed off
+as "the file is empty".
 """
 
 from __future__ import annotations
@@ -27,21 +34,33 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from xml.etree import ElementTree
 
+from . import ocr
+
 # OOXML namespaces
 _A = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
 _W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 _X = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
+_R = "{http://schemas.openxmlformats.org/package/2006/relationships}"
 
 # Guard rails: Canvas permits very large files, and extraction buffers in memory.
 MAX_EXTRACT_BYTES = 60 * 1024 * 1024
 MAX_SECTION_CHARS = 40_000
+
+# OCR is slow, so a slide with a dozen decorative images must not turn one read
+# into minutes. Three images per slide covers the usual screenshot + diagram.
+_MAX_OCR_IMAGES_PER_SLIDE = 3
+_MAX_OCR_DOCX_IMAGES = 5
 
 _READABLE_SUFFIXES = {
     ".pdf", ".pptx", ".pptm", ".docx", ".xlsx", ".xlsm", ".ipynb",
     ".html", ".htm", ".txt", ".md", ".markdown", ".csv", ".json",
     ".py", ".js", ".ts", ".java", ".c", ".cpp", ".rb", ".go", ".rs",
     ".sql", ".r", ".rmd", ".xml", ".yaml", ".yml", ".tex",
+    # Caption tracks and lecture transcripts: the readable form of a video.
+    ".vtt", ".srt", ".webvtt",
 }
+
+_TRANSCRIPT_SUFFIXES = {".vtt", ".srt", ".webvtt"}
 
 _SLIDE_RE = re.compile(r"ppt/slides/slide(\d+)\.xml$")
 _NOTES_RE = re.compile(r"ppt/notesSlides/notesSlide(\d+)\.xml$")
@@ -77,6 +96,11 @@ class Extracted:
     def char_count(self) -> int:
         return len(self.text)
 
+    @property
+    def unreadable(self) -> list[str]:
+        """Labels of sections with no text: image-only or genuinely blank."""
+        return [section.label for section in self.sections if not section.text.strip()]
+
     def toc(self, max_labels: int = 200) -> str:
         """A compact index — the right thing to show before the full text."""
         if not self.sections:
@@ -85,7 +109,7 @@ class Extracted:
         for section in self.sections[:max_labels]:
             words = len(section.text.split())
             if words == 0:
-                lines.append(f"- {section.label}: (empty / image only)")
+                lines.append(f"- {section.label}: (no text — image only)")
             else:
                 lines.append(f"- {section.label}: {words} words")
         if len(self.sections) > max_labels:
@@ -113,6 +137,11 @@ class Extracted:
 def is_readable(filename: str) -> bool:
     """Whether this module can pull text out of the file."""
     return Path(filename).suffix.lower() in _READABLE_SUFFIXES
+
+
+def is_transcript(filename: str) -> bool:
+    """Whether this file is a caption track / transcript rather than a document."""
+    return Path(filename).suffix.lower() in _TRANSCRIPT_SUFFIXES
 
 
 # ---------------------------------------------------------------------------
@@ -150,10 +179,6 @@ def html_to_text(body: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _xml_text(elements, tag: str) -> str:
-    return "".join(node.text or "" for node in elements.iter(tag))
-
-
 def _paragraphs_text(root, namespace: str) -> str:
     """One line per paragraph, so bullets stay separate instead of running together."""
     paragraphs = []
@@ -164,9 +189,50 @@ def _paragraphs_text(root, namespace: str) -> str:
     return "\n".join(paragraphs)
 
 
+def _image_parts(archive: zipfile.ZipFile, rels_name: str, base: str) -> list[bytes]:
+    """Read the images a slide (or document) part points at, via its rels file."""
+    try:
+        root = ElementTree.fromstring(archive.read(rels_name))
+    except (KeyError, ElementTree.ParseError):
+        return []
+
+    images: list[bytes] = []
+    for relationship in root.iter(_R + "Relationship"):
+        if not str(relationship.get("Type", "")).endswith("/image"):
+            continue
+        target = str(relationship.get("Target", ""))
+        if not target:
+            continue
+        # Targets are relative ("../media/image1.png"); resolve against the part.
+        candidate = target.lstrip("/")
+        if target.startswith("../"):
+            candidate = f"{base}/{target[3:]}"
+        try:
+            images.append(archive.read(candidate))
+        except KeyError:
+            continue
+    return images
+
+
+def _ocr_images(images: list[bytes], label: str, engine) -> str:
+    """OCR up to the per-slide cap and return the recognised text."""
+    chunks: list[str] = []
+    for image in images[:_MAX_OCR_IMAGES_PER_SLIDE]:
+        try:
+            text = engine.recognize(image).strip()
+        except Exception:
+            continue
+        if text:
+            chunks.append(text)
+    return "\n".join(chunks)
+
+
 def _extract_pptx(data: bytes) -> tuple[list[Section], list[str]]:
     sections: list[Section] = []
     warnings: list[str] = []
+    engine = ocr.backend()
+    ocr_slides = 0
+
     with zipfile.ZipFile(io.BytesIO(data)) as archive:
         names = archive.namelist()
         slides: dict[int, str] = {}
@@ -198,28 +264,77 @@ def _extract_pptx(data: bytes) -> tuple[list[Section], list[str]]:
                 except Exception:
                     pass
 
+            # A slide with no text is usually a screenshot or a diagram. OCR it
+            # rather than reporting an empty slide as if the deck said nothing.
+            if not body.strip() and engine is not None:
+                slide_part = slides[index]
+                rels = slide_part.replace("ppt/slides/", "ppt/slides/_rels/") + ".rels"
+                images = _image_parts(archive, rels, "ppt")
+                if images:
+                    body = _ocr_images(images, f"Slide {index}", engine)
+                    if body.strip():
+                        ocr_slides += 1
+
             parts = [body]
             if note_text:
                 parts.append(f"(speaker notes) {note_text}")
             merged = "\n".join(part for part in parts if part.strip())
             sections.append(Section(f"Slide {index}", merged))
-    if not any(section.text.strip() for section in sections):
+
+    empty = [section.label for section in sections if not section.text.strip()]
+    if ocr_slides:
         warnings.append(
-            "No text found in the slides — they may be images of slides, which "
-            "this server cannot read without OCR."
+            f"{ocr_slides} slide(s) had no text and were read with OCR "
+            f"({getattr(engine, 'name', 'ocr')}); OCR can misread symbols and formulas."
         )
+    if empty:
+        if engine is None:
+            warnings.append(
+                f"{len(empty)} of {len(sections)} slides contain no extractable text "
+                f"(screenshots or images). {ocr.unavailable_reason()}"
+            )
+        else:
+            warnings.append(
+                f"{len(empty)} of {len(sections)} slides still had no readable text "
+                "after OCR — they may be decorative images or a scan too poor to read."
+            )
     return sections, warnings
 
 
 def _extract_docx(data: bytes) -> tuple[list[Section], list[str]]:
+    warnings: list[str] = []
     with zipfile.ZipFile(io.BytesIO(data)) as archive:
         root = ElementTree.fromstring(archive.read("word/document.xml"))
-    paragraphs = []
-    for paragraph in root.iter(_W + "p"):
-        text = "".join(node.text or "" for node in paragraph.iter(_W + "t")).strip()
-        if text:
-            paragraphs.append(text)
-    return [Section("Document", "\n".join(paragraphs))], []
+        paragraphs = []
+        for paragraph in root.iter(_W + "p"):
+            text = "".join(node.text or "" for node in paragraph.iter(_W + "t")).strip()
+            if text:
+                paragraphs.append(text)
+        body = "\n".join(paragraphs)
+
+        if not body.strip():
+            engine = ocr.backend()
+            if engine is None:
+                warnings.append(
+                    "This document has no text (it may be scanned images). "
+                    f"{ocr.unavailable_reason()}"
+                )
+            else:
+                images = _image_parts(
+                    archive, "word/_rels/document.xml.rels", "word"
+                )[:_MAX_OCR_DOCX_IMAGES]
+                recognised = _ocr_images(images, "Document", engine)
+                if recognised.strip():
+                    body = recognised
+                    warnings.append(
+                        f"Document had no text layer and was read with OCR "
+                        f"({getattr(engine, 'name', 'ocr')}); check formulas by eye."
+                    )
+                else:
+                    warnings.append(
+                        "Document has no text and OCR found none in its images."
+                    )
+    return [Section("Document", body)], warnings
 
 
 def _extract_xlsx(data: bytes) -> tuple[list[Section], list[str]]:
@@ -272,6 +387,34 @@ def _extract_ipynb(data: bytes) -> tuple[list[Section], list[str]]:
     return sections, []
 
 
+_TIMESTAMP_LINE = re.compile(r"-->|^\d+$")
+
+
+def _extract_transcript(text: str) -> tuple[list[Section], list[str]]:
+    """Flatten a WebVTT/SRT caption track into prose.
+
+    Cue numbers and timestamps carry no meaning for studying, so they are
+    dropped; consecutive duplicate cues (common in auto-captions) are collapsed.
+    """
+    lines: list[str] = []
+    for block in re.split(r"\n\s*\n", text.replace("\r\n", "\n").replace("\r", "\n")):
+        keep = []
+        for line in block.splitlines():
+            stripped = line.strip()
+            if not stripped or _TIMESTAMP_LINE.search(stripped):
+                continue
+            if stripped.upper().startswith(("WEBVTT", "NOTE ", "KIND:", "LANGUAGE:")):
+                continue
+            keep.append(re.sub(r"<[^>]+>", "", stripped))
+        cue = " ".join(keep).strip()
+        if cue and (not lines or lines[-1] != cue):
+            lines.append(cue)
+    body = "\n".join(lines)
+    if not body:
+        return [], ["Caption file contained no text cues."]
+    return [Section("Transcript", body)], []
+
+
 def _extract_pdf(data: bytes) -> tuple[list[Section], list[str]]:
     try:
         from pypdf import PdfReader
@@ -284,7 +427,6 @@ def _extract_pdf(data: bytes) -> tuple[list[Section], list[str]]:
     warnings: list[str] = []
     reader = PdfReader(io.BytesIO(data))
     sections: list[Section] = []
-    empty_pages = 0
     for index, page in enumerate(reader.pages, start=1):
         try:
             text = page.extract_text() or ""
@@ -292,18 +434,59 @@ def _extract_pdf(data: bytes) -> tuple[list[Section], list[str]]:
             text = ""
             warnings.append(f"Page {index} could not be read: {type(exc).__name__}")
         cleaned = re.sub(r"\n{3,}", "\n\n", text).strip()
-        if not cleaned:
-            empty_pages += 1
         sections.append(Section(f"p.{index}", cleaned))
-    if sections and empty_pages == len(sections):
+
+    empty = [index for index, section in enumerate(sections) if not section.text.strip()]
+    if not empty:
+        return sections, warnings
+
+    engine = ocr.backend()
+    if engine is None:
         warnings.append(
-            "Every page is image-only (a scan or a deck exported as pictures). "
-            "Text extraction needs OCR for this file."
+            f"{len(empty)} of {len(sections)} pages have no text layer (scanned or "
+            f"image-only) and were not read. {ocr.unavailable_reason()}"
         )
-    elif empty_pages:
+        return sections, warnings
+
+    # OCR only the pages that need it, oldest-first, capped so a 300-page scan
+    # does not look like a hang. Overflow pages are reported, not dropped.
+    targets = empty[: ocr.MAX_OCR_PAGES]
+    numbers = [index + 1 for index in targets]
+    try:
+        images = engine.pdf_page_images(data, numbers)
+    except Exception as exc:
         warnings.append(
-            f"{empty_pages} of {len(sections)} pages had no extractable text "
-            "(likely scanned images)."
+            f"Could not render {len(targets)} image-only page(s) for OCR "
+            f"({type(exc).__name__}: {exc})."
+        )
+        images = []
+
+    ocr_pages = 0
+    for page_index, image in zip(targets, images, strict=False):
+        try:
+            recognised = engine.recognize(image)
+        except Exception:
+            continue
+        cleaned = re.sub(r"\n{3,}", "\n\n", recognised or "").strip()
+        if cleaned:
+            sections[page_index] = Section(sections[page_index].label, cleaned)
+            ocr_pages += 1
+
+    if ocr_pages:
+        warnings.append(
+            f"{ocr_pages} page(s) had no text layer and were read with OCR "
+            f"({getattr(engine, 'name', 'ocr')}); OCR can misread symbols and formulas."
+        )
+    still_empty = [index for index in empty if not sections[index].text.strip()]
+    if still_empty:
+        warnings.append(
+            f"{len(still_empty)} of {len(sections)} pages still have no readable text "
+            "after OCR — they may be blank scans or diagrams."
+        )
+    if len(empty) > len(targets):
+        warnings.append(
+            f"{len(empty) - len(targets)} further image-only page(s) were not OCR'd "
+            f"(limit {ocr.MAX_OCR_PAGES} per file). Read them individually if needed."
         )
     return sections, warnings
 
@@ -348,6 +531,8 @@ def extract_bytes(filename: str, data: bytes) -> Extracted:
             sections, warnings = _extract_xlsx(data)
         elif suffix == ".ipynb":
             sections, warnings = _extract_ipynb(data)
+        elif suffix in _TRANSCRIPT_SUFFIXES:
+            sections, warnings = _extract_transcript(_decode_text(data))
         elif suffix in (".html", ".htm"):
             text = html_to_text(_decode_text(data))
             sections, warnings = [Section("Page", text)], []
@@ -358,7 +543,9 @@ def extract_bytes(filename: str, data: bytes) -> Extracted:
                 name, kind,
                 warnings=[
                     f"'{suffix or 'no extension'}' is not a readable text format. "
-                    "Images, audio and video cannot be read as text."
+                    "Images, audio and video cannot be read as text. If this file "
+                    "belongs to a Panopto/Kaltura/YouTube item, look for a "
+                    "transcript or captions file (.vtt/.srt) in the course files."
                 ],
             )
     except zipfile.BadZipFile:
