@@ -16,11 +16,15 @@ Supports two transport modes:
 import argparse
 import asyncio
 import hmac
+import importlib.resources
 import json
+import os
 import sys
+from pathlib import Path
 from typing import Any
 
 from fastmcp import FastMCP
+from fastmcp.server.providers.skills import SkillsDirectoryProvider
 
 from .core.config import get_config, validate_canvas_url_scheme, validate_config
 from .core.credentials import (
@@ -138,6 +142,27 @@ class CanvasCredentialMiddleware:
             clear_http_request_context()
 
 
+def skills_root() -> Path | None:
+    """Where the shipped skill folders live, or None when the install is broken.
+
+    The skills are packaged inside canvas_mcp (hatch force-include), so a normal
+    install always has them; CANVAS_SKILLS_DIR overrides the location for a
+    checkout that keeps them elsewhere.
+    """
+    candidates: list[Path] = []
+    configured = os.environ.get("CANVAS_SKILLS_DIR")
+    if configured:
+        candidates.append(Path(configured).expanduser())
+    # A git checkout keeps them at the repo root; a wheel carries a copy inside
+    # the package (hatch force-include).
+    candidates.append(Path(__file__).resolve().parents[2] / "skills")
+    candidates.append(Path(str(importlib.resources.files("canvas_mcp"))) / "skills")
+    for candidate in candidates:
+        if candidate.is_dir() and any(candidate.glob("*/SKILL.md")):
+            return candidate
+    return None
+
+
 def create_server() -> FastMCP:
     """Create and configure the Canvas MCP server.
 
@@ -145,7 +170,19 @@ def create_server() -> FastMCP:
     constructor — see _run_http_server.
     """
     config = get_config()
-    return FastMCP(name=config.mcp_server_name)
+    mcp = FastMCP(name=config.mcp_server_name)
+
+    # The skills travel with the package and are exposed over MCP, so the model
+    # gets its workflows without the user copying files into a client folder.
+    skills = skills_root()
+    if skills is None:
+        log_error(
+            "Canvas skills are missing from this install; the model will not get "
+            "its workflow guidance. Reinstall canvas-mcp (`uv sync --reinstall`)."
+        )
+    else:
+        mcp.add_provider(SkillsDirectoryProvider(roots=skills))
+    return mcp
 
 
 def register_all_tools(mcp: FastMCP) -> None:

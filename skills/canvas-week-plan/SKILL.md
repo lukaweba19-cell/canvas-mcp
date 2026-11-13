@@ -70,4 +70,6 @@ workspace, read the rubric, draft it). For a test, offer `canvas-study-guide`.
 | `get_my_grade_breakdown` | Per-group grades, target maths |
 | `get_my_submission_status` | Missing vs submitted |
 | `get_my_peer_reviews_todo` | Pending peer reviews |
+| `get_my_todo_items` | Canvas to-do list (grading, submissions to review) |
+| `get_my_upcoming_assignments` | Upcoming work per course, beyond the planner window |
 | `get_my_course_grades` | Quick grade overview |

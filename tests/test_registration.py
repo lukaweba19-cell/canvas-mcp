@@ -153,12 +153,35 @@ def test_skills_are_discoverable_and_well_formed():
         "canvas-week-plan",
         "canvas-study-guide",
         "canvas-assignment-work",
+        "canvas-course-tools",
     }
     for path in skills:
         text = (path / "SKILL.md").read_text(encoding="utf-8")
         meta = _front_matter(text)
         assert meta.get("name") == path.name, f"{path} name must match its directory"
         assert len(meta.get("description", "")) > 40, f"{path} needs a real description"
+
+
+async def test_every_registered_tool_is_covered_by_a_skill(mcp):
+    names = await _registered(mcp)
+    referenced: set[str] = set()
+    for path in _skill_dirs():
+        text = (path / "SKILL.md").read_text(encoding="utf-8")
+        referenced.update(re.findall(r"`([a-z][a-z0-9_]+)`", text))
+    missing = names - referenced
+    assert not missing, f"tools with no skill guidance: {sorted(missing)}"
+
+
+async def test_server_exposes_every_skill_as_an_mcp_resource():
+    from canvas_mcp.server import create_server, skills_root
+
+    root = skills_root()
+    assert root is not None, "skills are missing from this install"
+
+    server = create_server()
+    uris = {str(resource.uri) for resource in await server.list_resources()}
+    for path in _skill_dirs():
+        assert f"skill://{path.name}/SKILL.md" in uris, uris
 
 
 async def test_skills_only_reference_tools_that_exist(mcp):
