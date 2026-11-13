@@ -15,7 +15,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
-from fixtures import build_pptx, build_text_pdf
+from fixtures import build_pptx, build_slide_pdf, build_text_pdf
 from helpers import text_of
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
@@ -34,9 +34,15 @@ DECK = build_pptx(
     [{"text": "Greedy choice property", "notes": "Proof by exchange argument"}]
 )
 
+# A lecture deck Canvas stored as PDF: landscape pages, so it reads per slide.
+SLIDE_PDF = build_slide_pdf(
+    ["Graphs and trees", "Dijkstra relaxes edges", "Proof by exchange argument"]
+)
+
 FILE_META = [
     {"id": 501, "display_name": "lecture.pdf", "filename": "lecture.pdf", "size": len(PDF)},
     {"id": 502, "display_name": "deck.pptx", "filename": "deck.pptx", "size": len(DECK)},
+    {"id": 503, "display_name": "slides.pdf", "filename": "slides.pdf", "size": len(SLIDE_PDF)},
 ]
 
 
@@ -59,7 +65,7 @@ class _CanvasStub(BaseHTTPRequestHandler):
     def do_GET(self):  # noqa: N802 - stdlib handler naming
         path = self.path.split("?", 1)[0]
         base = self.server.blob_base  # type: ignore[attr-defined]
-        blobs = {"/blob/501": PDF, "/blob/502": DECK}
+        blobs = {"/blob/501": PDF, "/blob/502": DECK, "/blob/503": SLIDE_PDF}
         if path in blobs:
             self._blob(blobs[path])
             return
@@ -76,6 +82,10 @@ class _CanvasStub(BaseHTTPRequestHandler):
             "/api/v1/courses/225/files/502": {
                 **FILE_META[1],
                 "url": base + "/blob/502",
+            },
+            "/api/v1/courses/225/files/503": {
+                **FILE_META[2],
+                "url": base + "/blob/503",
             },
         }
         if path in routes:
@@ -154,3 +164,23 @@ async def test_real_stdio_server_reads_pdf_and_pptx(tmp_path, canvas_stub):
             )
             assert "Sections:" in index
             assert "Depth first search explores one branch fully." not in index
+
+            # The same server reads a PDF slide deck slide by slide.
+            deck = text_of(
+                await session.call_tool(
+                    "read_course_material",
+                    {"course_identifier": 225, "file_id": 503, "full_text": True},
+                )
+            )
+            assert "## Slide 1" in deck and "## Slide 3" in deck, deck
+            assert "Graphs and trees" in deck
+            assert "Proof by exchange argument" in deck
+
+            slide = text_of(
+                await session.call_tool(
+                    "read_material_section",
+                    {"course_identifier": 225, "file_id": 503, "section": "Slide 2"},
+                )
+            )
+            assert "Dijkstra relaxes edges" in slide
+            assert "Graphs and trees" not in slide

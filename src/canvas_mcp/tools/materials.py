@@ -405,8 +405,10 @@ def register_material_tools(mcp: FastMCP) -> None:
         call read_material_section for one section. Pass full_text=True to get
         the extracted text itself in the same call, stopping at the first section
         that does not fit max_chars and ending with a note that counts the
-        sections not shown and names the next call. Slide speaker notes are
-        included, since they usually say what matters.
+        sections not shown and names the next call. PDF decks exported from
+        slides are read slide by slide (Slide 1, Slide 2, ...), and any section
+        with no text is named rather than silently dropped. Slide speaker notes
+        are included, since they usually say what matters.
 
         Args:
             course_identifier: Course code or Canvas ID
@@ -631,7 +633,8 @@ def render_extracted_text(
     Non-reading files get the same honest status and reason as the index; a file
     bigger than ``max_chars`` is cut at the first section that does not fit (later
     smaller sections are not pulled in behind it) and the trailing note counts
-    exactly how many sections were not shown, with the next call named.
+    exactly how many sections were not shown, with the next call named. Sections
+    that carry no text are dropped from the body and named in their own note.
     """
     sections = record.get("sections", [])
     extracted = extract.Extracted(
@@ -677,6 +680,19 @@ def render_extracted_text(
             f"not shown, starting at '{rest[0][0]}': {labels}. "
             "Read them with read_material_section(file_id=..., section='...'), "
             "or raise max_chars.]"
+        )
+
+    # A section with no text is dropped from the body; say which ones, so a
+    # screenshot slide inside a readable deck never disappears without a trace.
+    untexted = [section.label for section in extracted.sections if not section.text.strip()]
+    if untexted:
+        listed = ", ".join(untexted[:10])
+        if len(untexted) > 10:
+            listed += f" (+{len(untexted) - 10} more)"
+        lines.append(
+            f"\n...[also not shown: {len(untexted)} section(s) with no text "
+            f"(image-only or blank): {listed}. read_material_section reports "
+            "what each one contains.]"
         )
     return "\n".join(lines)
 

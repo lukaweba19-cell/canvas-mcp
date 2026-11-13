@@ -10,7 +10,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
-from fixtures import build_pptx, build_text_pdf
+from fixtures import build_pptx, build_slide_pdf, build_text_pdf
 from helpers import call
 
 from canvas_mcp.core import extract
@@ -29,6 +29,18 @@ DECK = build_pptx(
         {"text": "Dijkstra relaxes edges"},
     ]
 )
+# A lecture deck exported to PDF: every page landscape, labeled per slide.
+SLIDE_DECK = build_slide_pdf(
+    [
+        "Slide body 1 " + "alpha " * 60,
+        "Slide body 2 " + "beta " * 140,
+        "Slide body 3 " + "gamma " * 5,
+        "Slide body 4 " + "delta " * 140,
+        "Slide body 5 " + "epsilon " * 5,
+    ]
+)
+BLANK_SLIDE_DECK = build_slide_pdf(["Deck intro", "", "Deck conclusion"])
+
 # Alternating long/short pages: p.2 is the first that cannot fit in 1000 chars,
 # and p.3/p.5 would fit afterwards, so a skip-and-resume cut would show them.
 LONG = build_text_pdf(
@@ -66,6 +78,8 @@ def file_server():
         "/lecture.pdf": PDF,
         "/deck.pptx": DECK,
         "/long.pdf": LONG,
+        "/slides.pdf": SLIDE_DECK,
+        "/deck-blank.pdf": BLANK_SLIDE_DECK,
         "/scan.pdf": build_text_pdf(["", ""]),
         "/big.pdf": b"%PDF-1.4\n" + b"x" * (2 * 1024 * 1024),
     }
@@ -163,6 +177,66 @@ async def test_full_text_stops_at_the_budget_and_names_the_next_call(
     assert "starting at 'p.2'" in text
     assert "read_material_section" in text
     assert "or raise max_chars" in text
+
+
+async def test_pdf_deck_is_read_slide_by_slide_with_the_budget_cut(canvas, file_server, mcp):
+    _route_file(canvas, file_server, 507, "deck.pdf", "/slides.pdf")
+
+    text = await call(
+        mcp,
+        "read_course_material",
+        course_identifier=225,
+        file_id=507,
+        full_text=True,
+        max_chars=1000,
+    )
+
+    shown = [n for n in range(1, 6) if f"Slide body {n} " in text]
+    hidden = [n for n in range(1, 6) if f"Slide body {n} " not in text]
+    assert shown == [1], text
+    assert hidden == [2, 3, 4, 5], text
+    assert "## Slide 1" in text
+    assert "p.1" not in text, "a deck must be labeled by slide, not by page"
+    # The cut note names the unread slides and how many there are.
+    assert "4 more section(s) not shown" in text
+    assert "starting at 'Slide 2'" in text
+
+
+async def test_pdf_deck_slides_are_addressable_by_label(canvas, file_server, mcp):
+    _route_file(canvas, file_server, 508, "deck.pdf", "/slides.pdf")
+
+    index = await call(mcp, "read_course_material", course_identifier=225, file_id=508)
+    assert "- Slide 1: " in index
+    assert "- Slide 3: " in index
+    assert "p.1" not in index
+
+    slide = await call(
+        mcp,
+        "read_material_section",
+        course_identifier=225,
+        file_id=508,
+        section="Slide 3",
+    )
+    assert "Slide body 3" in slide
+    assert "Slide body 1" not in slide
+    assert "— Slide 3" in slide
+
+
+async def test_slide_with_no_text_is_named_not_silently_dropped(
+    canvas, file_server, blank_ocr, mcp
+):
+    _route_file(canvas, file_server, 509, "deck-blank.pdf", "/deck-blank.pdf")
+
+    text = await call(
+        mcp, "read_course_material", course_identifier=225, file_id=509, full_text=True
+    )
+
+    assert "Deck intro" in text and "Deck conclusion" in text
+    assert "## Slide 2" not in text
+    assert (
+        "also not shown: 1 section(s) with no text (image-only or blank): Slide 2."
+        in text
+    ), text
 
 
 async def test_scanned_pdf_full_text_names_image_only_not_empty(

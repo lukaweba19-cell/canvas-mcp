@@ -47,9 +47,12 @@ you which files are readable, then `read_course_material` +
   cap: download it and open it locally.
 - `read_course_material(course_identifier, file_id, full_text=True)` — extract
   a file's text and get it back in the same call: PDF, scanned PDF via built-in
-  OCR, PPTX with speaker notes, DOCX, XLSX, IPYNB, transcripts. Leave
-  `full_text` off for a section index of a long deck; add `max_chars` to raise
-  the budget. Long files stop at a section boundary and name the next call.
+  OCR, PPTX with speaker notes, DOCX, XLSX, IPYNB, transcripts. A lecture deck
+  that Canvas stores as a PDF is read slide by slide (`Slide 1`, `Slide 2`, ...),
+  exactly like a PPTX, so `read_material_section(section="Slide 4")` works for
+  either. Leave `full_text` off for a section index of a long deck; add
+  `max_chars` to raise the budget. Long files stop at the first section that
+  does not fit and the note counts the unread slides/pages by name.
 - `download_course_file(course_identifier, file_id)` — only for a file this
   server cannot read (e.g. an archive), and only on a local stdio server; it
   writes to the server's disk.

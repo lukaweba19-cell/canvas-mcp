@@ -68,6 +68,32 @@ from ..core.write_confirmation import ConfirmationGuard, unconfirmed_write_warni
 # flag, and discussion participation already has dedicated tools.
 _SUPPORTED_TYPES = ("online_text_entry", "online_url", "online_upload")
 
+# /submissions has no API path for these: Canvas only accepts them from its own
+# recorder or annotation viewer. Saying so beats "invalid submission_type".
+_UNSUBMITTABLE_TYPES = {
+    "media_recording": (
+        "Canvas only accepts these from its own in-browser recorder, which the "
+        "API cannot create a media id for"
+    ),
+    "student_annotation": (
+        "Canvas only accepts these from its own PDF annotation viewer, which the "
+        "API cannot produce"
+    ),
+}
+
+
+def _rejected_submission_type(submission_type: str) -> str:
+    """Explain an unsupported submission type instead of only listing valid ones."""
+    supported = ", ".join(_SUPPORTED_TYPES)
+    reason = _UNSUBMITTABLE_TYPES.get(submission_type)
+    if reason:
+        return (
+            f"Error: '{submission_type}' cannot be submitted through Canvas's API: "
+            f"{reason}. Submit it in Canvas itself, or — if the assignment also "
+            f"accepts one of these — resubmit as {supported}."
+        )
+    return f"Error: submission_type must be one of {supported} (got '{submission_type}')"
+
 # These tools are self-scoped by a hard-coded "/submissions/self" path suffix. That
 # only holds while assignment_id cannot end the path early, so a non-numeric ID is
 # refused outright rather than passed to Canvas.
@@ -684,10 +710,7 @@ def register_student_write_tools(mcp: FastMCP) -> None:
                 from_draft: Submit the latest saved draft (online_text_entry only)
             """
             if submission_type not in _SUPPORTED_TYPES:
-                return (
-                    f"Error: submission_type must be one of "
-                    f"{', '.join(_SUPPORTED_TYPES)} (got '{submission_type}')"
-                )
+                return _rejected_submission_type(submission_type)
 
             validated_assignment_id = coerce_canvas_id(assignment_id)
             if validated_assignment_id is None:

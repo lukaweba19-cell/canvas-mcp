@@ -114,21 +114,28 @@ def _pdf(objects: list[bytes]) -> bytes:
     return out
 
 
-def build_text_pdf(pages: list[str]) -> bytes:
-    """A PDF with a real text layer, one page per string."""
+def build_text_pdf(
+    pages: list[str], size: tuple[int, int] = (612, 792)
+) -> bytes:
+    """A PDF with a real text layer, one page per string.
+
+    ``size`` is the page box: the default is portrait (a document). Pass a
+    landscape size (see :func:`build_slide_pdf`) for a deck exported to PDF.
+    """
+    width, height = size
     objects: list[bytes] = [b"<</Type/Catalog/Pages 2 0 R>>"]
     kids = " ".join(f"{3 + 2 * index} 0 R" for index in range(len(pages)))
     objects.append(f"<</Type/Pages/Kids[{kids}]/Count {len(pages)}>>".encode())
     for index, text in enumerate(pages):
         stream = (
-            f"BT /F1 18 Tf 72 720 Td ({text}) Tj ET".encode()
+            f"BT /F1 18 Tf 72 {height - 72} Td ({text}) Tj ET".encode()
             if text
             else b""
         )
         page_number = 3 + 2 * index
         objects.append(
             (
-                f"<</Type/Page/Parent 2 0 R/MediaBox[0 0 612 792]"
+                f"<</Type/Page/Parent 2 0 R/MediaBox[0 0 {width} {height}]"
                 f"/Contents {page_number + 1} 0 R"
                 f"/Resources<</Font<</F1 {3 + 2 * len(pages)} 0 R>>>>>>"
             ).encode()
@@ -138,6 +145,11 @@ def build_text_pdf(pages: list[str]) -> bytes:
         )
     objects.append(b"<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>")
     return _pdf(objects)
+
+
+def build_slide_pdf(slides: list[str]) -> bytes:
+    """A deck exported to PDF: one landscape page per slide, with a text layer."""
+    return build_text_pdf(slides, size=(960, 540))
 
 
 def build_image_only_pdf(jpegs: list[tuple[bytes, int, int]]) -> bytes:

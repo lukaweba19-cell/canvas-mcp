@@ -6,7 +6,8 @@ are usually the professor's own explanation of what matters) once, and caches
 the result so repeat reads cost nothing.
 
 Formats:
-- PDF               -> one section per page, via pypdf
+- PDF               -> one section per page (a landscape deck exported to PDF
+                       is labeled per slide), via pypdf
 - PPTX/PPTM         -> one section per slide + its notes
 - DOCX              -> one section for the document
 - XLSX              -> one section per sheet
@@ -586,18 +587,49 @@ def _extract_transcript(text: str) -> tuple[list[Section], list[str]]:
     return [Section("Transcript", body)], []
 
 
+def _page_is_landscape(page) -> bool:
+    """Whether a PDF page is wider than tall, which is how decks are exported."""
+    try:
+        width = float(page.mediabox.width)
+        height = float(page.mediabox.height)
+    except Exception:
+        return False
+    try:
+        rotation = int(page.get("/Rotate", 0) or 0)
+    except Exception:
+        rotation = 0
+    if rotation % 180 == 90:
+        width, height = height, width
+    return width > height
+
+
+def _pdf_is_slide_deck(pages) -> bool:
+    """A lecture deck exported to PDF is landscape on every page; a document is not.
+
+    Canvas hands over slides as PDFs constantly. Labeling those pages ``Slide N``
+    (instead of ``p.N``) keeps section reads, the budget cut and the unread list
+    talking about the same things the professor's deck does.
+    """
+    pages = list(pages)
+    return len(pages) > 1 and all(_page_is_landscape(page) for page in pages)
+
+
 def _extract_pdf(data: bytes) -> tuple[list[Section], list[str]]:
     warnings: list[str] = []
     reader = PdfReader(io.BytesIO(data))
+    pages = list(reader.pages)
+    deck = _pdf_is_slide_deck(pages)
+    noun, nouns = ("slide", "slides") if deck else ("page", "pages")
     sections: list[Section] = []
-    for index, page in enumerate(reader.pages, start=1):
+    for index, page in enumerate(pages, start=1):
+        label = f"Slide {index}" if deck else f"p.{index}"
         try:
             text = page.extract_text() or ""
         except Exception as exc:  # a broken page must not lose the whole file
             text = ""
-            warnings.append(f"Page {index} could not be read: {type(exc).__name__}")
+            warnings.append(f"{label} could not be read: {type(exc).__name__}")
         cleaned = re.sub(r"\n{3,}", "\n\n", text).strip()
-        sections.append(Section(f"p.{index}", cleaned))
+        sections.append(Section(label, cleaned))
 
     empty = [index for index, section in enumerate(sections) if not section.text.strip()]
     if not empty:
@@ -606,7 +638,7 @@ def _extract_pdf(data: bytes) -> tuple[list[Section], list[str]]:
     engine = ocr.backend()
     if engine is None:
         warnings.append(
-            f"{len(empty)} of {len(sections)} pages have no text layer (scanned or "
+            f"{len(empty)} of {len(sections)} {nouns} have no text layer (scanned or "
             f"image-only) and were not read. {ocr.unavailable_reason()}"
         )
         return sections, warnings
@@ -619,7 +651,7 @@ def _extract_pdf(data: bytes) -> tuple[list[Section], list[str]]:
         images = engine.pdf_page_images(data, numbers)
     except Exception as exc:
         warnings.append(
-            f"Could not render {len(targets)} image-only page(s) for OCR "
+            f"Could not render {len(targets)} image-only {noun}(s) for OCR "
             f"({type(exc).__name__}: {exc})."
         )
         images = []
@@ -643,12 +675,12 @@ def _extract_pdf(data: bytes) -> tuple[list[Section], list[str]]:
     still_empty = [index for index in empty if not sections[index].text.strip()]
     if still_empty:
         warnings.append(
-            f"{len(still_empty)} of {len(sections)} pages still have no readable text "
-            "after OCR — they may be blank scans or diagrams."
+            f"{len(still_empty)} of {len(sections)} {nouns} still have no readable "
+            "text after OCR — they may be blank scans or diagrams."
         )
     if len(empty) > len(targets):
         warnings.append(
-            f"{len(empty) - len(targets)} further image-only page(s) were not OCR'd "
+            f"{len(empty) - len(targets)} further image-only {nouns} were not OCR'd "
             f"(limit {ocr.MAX_OCR_PAGES} per file). Read them individually if needed."
         )
     return sections, warnings

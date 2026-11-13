@@ -8,6 +8,7 @@ from fixtures import (
     build_ipynb,
     build_legacy_office,
     build_pptx,
+    build_slide_pdf,
     build_text_pdf,
     build_vtt,
     build_xlsx,
@@ -138,6 +139,24 @@ def test_pdf_text_layer_is_read_per_page():
     assert [section.label for section in result.sections] == ["p.1", "p.2"]
     assert "Depth first search" in result.text
     assert not any("OCR" in warning for warning in result.warnings)
+
+
+def test_landscape_pdf_deck_is_labeled_and_read_by_slide():
+    """A lecture deck exported to PDF must read as slides, not as anonymous pages."""
+    result = extract.extract_bytes(
+        "lecture.pdf",
+        build_slide_pdf(["Introduction to trees", "Depth first search", "Breadth first"]),
+    )
+
+    assert [section.label for section in result.sections] == [
+        "Slide 1",
+        "Slide 2",
+        "Slide 3",
+    ]
+    assert result.section("Slide 2") is not None
+    assert result.section("Slide 2").text == "Depth first search"
+    assert "Breadth first" in result.text
+    assert "p.1" not in result.toc(), "a deck must not be indexed as document pages"
 
 
 def test_image_only_pdf_with_a_broken_ocr_install_explains_the_fix(monkeypatch):

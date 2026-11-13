@@ -132,6 +132,19 @@ async def test_from_draft_is_rejected_for_uploads(canvas_routes, mcp):
     assert "only applies to online_text_entry" in result
 
 
+async def test_media_recording_is_refused_with_the_real_reason(canvas, policy_allow, mcp):
+    """Canvas has no API path for a recording, and the refusal must say that."""
+    result = await call(
+        mcp, "submit_assignment", course_identifier=225, assignment_id=42,
+        submission_type="media_recording",
+    )
+
+    assert "cannot be submitted through Canvas's API" in result
+    assert "in-browser recorder" in result
+    assert "online_upload" in result, "it must name a route that can work"
+    assert not canvas.calls_to("post"), "a refusal must never POST"
+
+
 async def test_group_assignment_is_refused(canvas, policy_allow, mcp):
     canvas.route("get", "/courses/225/assignments/7/submissions/self", SUBMISSION)
     canvas.route(
