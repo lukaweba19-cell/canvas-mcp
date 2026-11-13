@@ -25,6 +25,13 @@ Each file carries a real status, not just a guess from its extension:
 - `NOT readable — empty`: valid file, no content at all.
 - `NOT readable — unsupported format`: video/audio/archive; look for a
   caption/transcript file instead (Panopto/Kaltura links are the same story).
+- `NOT readable — unsupported encoding`: the bytes are binary or in an encoding
+  that is not UTF-8/UTF-16/Windows-1252, so there is no text to pull out. This
+  is not an empty file. Ask for a PDF or plain-text copy.
+
+`get_my_assignment_brief` (attachment statuses) and `get_my_week_plan`
+(per-course material readiness) report the same statuses with the same words,
+so a file is never called readable in one place and unreadable in another.
 
 Never treat `unread` or any `NOT readable` line as if it had been studied.
 

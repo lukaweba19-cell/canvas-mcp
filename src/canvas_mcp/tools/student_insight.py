@@ -18,6 +18,7 @@ from ..core.client import fetch_all_paginated_results, make_canvas_request
 from ..core.dates import format_date, parse_date
 from ..core.untrusted_content import fence_untrusted, fence_untrusted_inline
 from ..core.validation import coerce_canvas_id, validate_params
+from .materials import readiness_lines
 
 
 def _html(value: str | None) -> str:
@@ -84,6 +85,22 @@ def register_student_insight_tools(mcp: FastMCP) -> None:
             lines.append("⚠️  Group assignment — agent-assisted submission is refused by design.")
 
         lines.append("\nPrompt:\n" + fence_untrusted(_html(assignment.get("description")) or "(none)", "assignment prompt"))
+
+        attachments = assignment.get("attachments") or []
+        if attachments:
+            lines.append(
+                f"\nReadable material — {len(attachments)} attachment(s). Status comes "
+                "from the extracted text, not from the file type:"
+            )
+            lines.extend(
+                readiness_lines(course_id, course_display, attachments, limit=8)
+            )
+        else:
+            lines.append(
+                "\nReadable material: this assignment has no attachments of its own. "
+                "get_course_content_map lists the course files and whether their text "
+                "can actually be read."
+            )
 
         parsed = rubric_core.from_assignment(assignment)
         if parsed.criteria:
@@ -304,6 +321,28 @@ def register_student_insight_tools(mcp: FastMCP) -> None:
             lines.append(f"Submitted ({len(done)}): " + ", ".join(
                 fence_untrusted_inline(row["name"], "assignment name") for row in done[:8]
             ))
+
+        course_ids: list[int] = []
+        for row in rows:
+            if row["course_id"] and row["course_id"] not in course_ids:
+                course_ids.append(row["course_id"])
+        if course_ids:
+            lines.append("## Material readiness")
+            for course_id in course_ids:
+                course = await get_course_code(course_id) or course_id
+                files = await fetch_all_paginated_results(
+                    f"/courses/{course_id}/files", {"per_page": 100}
+                )
+                if isinstance(files, dict) and "error" in files:
+                    lines.append(f"- {course}: could not list files ({files['error']})")
+                    continue
+                if not files:
+                    lines.append(f"- {course}: no files posted yet")
+                    continue
+                lines.extend(
+                    readiness_lines(course_id, course, files, limit=6, header=f"- {course}:")
+                )
+            lines.append("")
 
         if overdue:
             lines.append(

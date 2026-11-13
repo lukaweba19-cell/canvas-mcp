@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
 import pytest
 from fixtures import build_pptx, build_text_pdf
@@ -167,6 +168,7 @@ async def test_file_listing_carries_status_per_file(course, no_ocr, mcp):
         ("deck.pptx", build_pptx([{"text": "", "images": [("a.png", b"x")]}])),
         ("empty.txt", b"  \n "),
         ("clip.mp4", b"\x00\x01"),
+        ("blob.txt", b"\x00\x01\x02 binary \x00\xff"),
         ("broken.docx", b"not a zip"),
         ("notes.pptx", build_pptx([{"text": "Real text here"}])),
     ],
@@ -178,7 +180,13 @@ def test_readable_status_always_carries_words(name, data):
         assert status.words > 0, "readable must mean text exists"
         assert _WORDS_EXTRACTED.search(status.label())
     else:
-        assert status.reason in {"image_only", "empty", "unsupported", "failed"}
+        assert status.reason in {
+            "image_only",
+            "empty",
+            "unsupported",
+            "encoding",
+            "failed",
+        }
         assert status.label().startswith("NOT readable — ")
         assert not _WORDS_EXTRACTED.search(status.label())
 
@@ -188,3 +196,15 @@ def test_status_for_unread_file_does_not_claim_readability():
     assert not status.readable
     assert status.reason == "not_read"
     assert "readable —" not in status.label()
+
+
+def test_readable_labels_have_a_single_source():
+    """No module may format its own readable/NOT readable wording."""
+    root = Path(__file__).resolve().parents[1]
+    offenders = [
+        str(path.relative_to(root))
+        for path in (root / "src" / "canvas_mcp").rglob("*.py")
+        if path.name != "extract.py"
+        and ("NOT readable — " in path.read_text() or "readable — " in path.read_text())
+    ]
+    assert not offenders, f"readable wording outside ContentStatus: {offenders}"

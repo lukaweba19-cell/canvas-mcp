@@ -43,6 +43,96 @@ def _find_cache(
     return student_store.find_material_cache(course_identifier, file_id, course_code)
 
 
+_STATUS_ORDER = {
+    "failed": 0,
+    "encoding": 0,
+    "unsupported": 0,
+    "image_only": 0,
+    "empty": 0,
+    "quiz": 0,
+    "embedded": 0,
+    "external": 0,
+    "unknown_item": 0,
+    "not_read": 1,
+    "text": 2,
+}
+
+
+def file_statuses(
+    course_identifier: str | int,
+    course_code: str | None,
+    file_list: list[dict[str, Any]],
+) -> list[tuple[dict[str, Any], extract.ContentStatus]]:
+    """Each file paired with the status of its cached extraction."""
+    pairs = [
+        (
+            entry,
+            extract.status_for(
+                _file_name(entry),
+                student_store.load_material_record(
+                    course_identifier, entry.get("id"), course_code
+                ),
+            ),
+        )
+        for entry in file_list
+    ]
+    pairs.sort(key=lambda pair: _STATUS_ORDER.get(pair[1].reason, 1))
+    return pairs
+
+
+def readiness_lines(
+    course_identifier: str | int,
+    course_code: str | None,
+    file_list: list[dict[str, Any]],
+    *,
+    limit: int = 10,
+    header: str | None = None,
+) -> list[str]:
+    """Readable/not-readable lines for a set of files, blockers first.
+
+    Used by the content map, the assignment brief and the week plan, so all
+    three describe material with the same words and the same reason.
+    """
+    pairs = file_statuses(course_identifier, course_code, file_list)
+    readable = [status for _, status in pairs if status.readable]
+    unread = sum(1 for _, status in pairs if status.reason == "not_read")
+    reasons: dict[str, int] = {}
+    for _, status in pairs:
+        if not status.readable and status.reason != "not_read":
+            reasons[status.reason] = reasons.get(status.reason, 0) + 1
+
+    summary: list[str] = []
+    if readable:
+        summary.append(
+            f"{len(readable)} readable ({sum(s.words for s in readable)} words)"
+        )
+    if unread:
+        summary.append(f"{unread} unread")
+    for reason in ("image_only", "empty", "unsupported", "encoding", "failed"):
+        if reasons.get(reason):
+            summary.append(
+                f"{reasons[reason]} NOT readable ({extract.REASON_LABELS[reason]})"
+            )
+
+    lines: list[str] = []
+    if header is not None:
+        lines.append(f"{header} " + (" | ".join(summary) or "no files"))
+    elif summary:
+        lines.append("- " + " | ".join(summary))
+    for entry, status in pairs[:limit]:
+        lines.append(
+            f"  - file_id={entry.get('id')} "
+            f"{fence_untrusted_inline(_file_name(entry), 'file name')} — "
+            f"{status.label()}"
+        )
+    if len(pairs) > limit:
+        lines.append(
+            f"  - … and {len(pairs) - limit} more file(s); "
+            "get_course_content_map lists the rest"
+        )
+    return lines
+
+
 def _statuses_for(
     course_identifier: str | int,
     course_code: str | None,
@@ -132,7 +222,12 @@ def _item_guidance(
     if item_type == "Discussion":
         return "list_discussion_entries"
     if item_type == "Quiz":
-        return "NOT readable — quizzes cannot be read or taken here; open it in Canvas"
+        return extract.ContentStatus(
+            False,
+            "quiz",
+            "quizzes cannot be read or taken here; open it in Canvas",
+            kind="quiz",
+        ).label()
     if item_type == "File":
         entry = files_by_id.get(str(item.get("content_id")))
         if entry is None:
@@ -150,11 +245,13 @@ def _item_guidance(
         transcript = _matching_transcript(title, transcripts)
         url = item.get("external_url") or item.get("url")
         if transcript is not None:
-            return (
-                "embedded video/LTI — the item itself is NOT readable, but a "
-                f"transcript exists: read_course_material(file_id={transcript.get('id')}) "
-                f"for {_file_name(transcript)}"
-            )
+            return extract.ContentStatus(
+                False,
+                "embedded",
+                "the item itself has no text, but a transcript exists: "
+                f"read_course_material(file_id={transcript.get('id')}) "
+                f"for {_file_name(transcript)}",
+            ).label()
         if item_type == "ExternalTool" and transcripts:
             # No name match, but the course has transcripts: name them, so a
             # differently-titled recording is still reachable.
@@ -162,29 +259,35 @@ def _item_guidance(
                 f"file_id={entry.get('id')} ({_file_name(entry)})"
                 for entry in transcripts[:6]
             )
-            return (
-                "embedded video/LTI — the item itself is NOT readable as text, and no "
-                "transcript matched its title. Transcripts in this course: "
+            return extract.ContentStatus(
+                False,
+                "embedded",
+                "no transcript matched its title. Transcripts in this course: "
                 f"{listed}. Pass one to read_course_material to read what was said."
-                + (f" To watch it: {url}" if url else "")
-            )
+                + (f" To watch it: {url}" if url else ""),
+            ).label()
         if transcripts:
-            return (
-                "external link — NOT readable as text; open "
+            return extract.ContentStatus(
+                False,
+                "external",
+                "open "
                 + (str(url) if url else "it in Canvas")
                 + ". The course also has transcripts: "
                 + "; ".join(
                     f"file_id={entry.get('id')} ({_file_name(entry)})"
                     for entry in transcripts[:4]
-                )
-            )
-        return (
-            "embedded video/LTI - NOT readable as text and no transcript in course "
-            "files; open "
+                ),
+            ).label()
+        return extract.ContentStatus(
+            False,
+            "embedded",
+            "no transcript in course files; open "
             + (str(url) if url else "it in Canvas")
-            + " and read the slides or notes posted alongside it"
-        )
-    return "unknown item type — not readable as text; open it in Canvas"
+            + " and read the slides or notes posted alongside it",
+        ).label()
+    return extract.ContentStatus(
+        False, "unknown_item", "open it in Canvas"
+    ).label()
 
 
 def register_material_tools(mcp: FastMCP) -> None:
@@ -367,26 +470,40 @@ def register_material_tools(mcp: FastMCP) -> None:
             filename=record.get("filename", "file"),
             kind=record.get("kind", "unknown"),
             sections=[extract.Section(item["label"], item["text"]) for item in record.get("sections", [])],
+            warnings=list(record.get("warnings") or []),
         )
+        status = extracted.status
         found = extracted.section(section)
         if found is None:
             available = ", ".join(item["label"] for item in record.get("sections", [])[:15])
             return f"No section '{section}'. Available: {available}"
 
         if not found.text.strip():
-            hint = (
-                "This section has no text layer: it is an image, a scanned page, or empty. "
-            )
-            if ocr.is_available():
-                hint += (
-                    "OCR is installed but found nothing readable here — re-run "
-                    "read_course_material with refresh=true, or view the page in Canvas."
+            if status.reason == "image_only":
+                hint = (
+                    "This section has no text layer: it is an image or a scanned page. "
                 )
+                if ocr.is_available():
+                    hint += (
+                        "OCR is installed but found nothing readable here — re-run "
+                        "read_course_material with refresh=true, or view the page in Canvas."
+                    )
+                else:
+                    hint += f"It was not read. {ocr.unavailable_reason()}"
+            elif status.reason == "empty":
+                hint = "This file contains no text at all (it is empty)."
+            elif status.reason == "encoding":
+                hint = (
+                    "This file has no readable text: its bytes are binary or not "
+                    "UTF-8/UTF-16/Windows-1252 text."
+                )
+            elif status.reason == "failed":
+                hint = f"This file could not be parsed: {status.detail}."
             else:
-                hint += f"It was not read. {ocr.unavailable_reason()}"
+                hint = "This section has no text."
             return (
                 f"{fence_untrusted_inline(record.get('filename', 'file'), 'file name')} "
-                f"— {found.label}\n\n{hint}"
+                f"— {found.label}\n\n{hint}\nFile status: {status.label()}"
             )
 
         body = found.text[:_MAX_SECTION_RETURN]
@@ -484,6 +601,11 @@ def _describe_cached(record: dict[str, Any], cache_path: str) -> str:
                 "needs OCR (" + ("available, but it found no text" if ocr.is_available()
                 else "install it with `uv sync --extra ocr`") + "), or a transcript if "
                 "one is posted."
+            )
+        elif status.reason == "encoding":
+            lines.append(
+                "\nThis file has no readable text: its bytes are binary or not "
+                "UTF-8/UTF-16/Windows-1252 text. Ask for a PDF or plain-text copy."
             )
         elif status.reason == "failed":
             lines.append(f"\nExtraction failed: {status.detail}")

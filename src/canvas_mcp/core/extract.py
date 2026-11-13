@@ -161,9 +161,30 @@ _IMAGE_ONLY_WARNING = re.compile(
 _UNSUPPORTED_WARNING = re.compile(
     r"not a readable text format|has no text representation", re.IGNORECASE
 )
+_ENCODING_WARNING = re.compile(
+    r"unsupported text encoding|unsupported encoding|binary file|binary bytes",
+    re.IGNORECASE,
+)
 _FAILED_WARNING = re.compile(
     r"corrupt|extraction failed|could not be read|not valid", re.IGNORECASE
 )
+_BINARY_HINT = (
+    "File is binary or in an unsupported text encoding (tried UTF-8, UTF-16 and "
+    "Windows-1252), so it has no readable text."
+)
+
+# The word used in "NOT readable — <kind>: ..." for each reason.
+REASON_LABELS = {
+    "image_only": "image-only",
+    "empty": "empty",
+    "unsupported": "unsupported format",
+    "encoding": "unsupported encoding",
+    "failed": "extraction failed",
+    "quiz": "quiz",
+    "embedded": "embedded video/LTI",
+    "external": "external link",
+    "unknown_item": "unknown item type",
+}
 
 
 @dataclass(frozen=True)
@@ -176,22 +197,18 @@ class ContentStatus:
     """
 
     readable: bool
-    reason: str  # text | image_only | empty | unsupported | failed | not_read
+    reason: str  # text | image_only | empty | unsupported | encoding | failed | not_read
     detail: str
     words: int = 0
+    kind: str = ""  # overrides the REASON_LABELS word, e.g. for module items
 
     def label(self) -> str:
         if self.readable:
             return f"readable — {self.words} words extracted"
         if self.reason == "not_read":
             return "unread — extractable format: call read_course_material"
-        if self.reason == "image_only":
-            return f"NOT readable — image-only: {self.detail}"
-        if self.reason == "empty":
-            return "NOT readable — empty: the file contains no text"
-        if self.reason == "unsupported":
-            return f"NOT readable — unsupported format: {self.detail}"
-        return f"NOT readable — extraction failed: {self.detail}"
+        kind = self.kind or REASON_LABELS.get(self.reason, self.reason)
+        return f"NOT readable — {kind}: {self.detail}"
 
 
 def _ocr_hint() -> str:
@@ -221,6 +238,13 @@ def status_from_parts(
     joined = " ".join(warnings)
     if _UNSUPPORTED_WARNING.search(joined):
         return ContentStatus(False, "unsupported", _unsupported_detail(filename))
+    if _ENCODING_WARNING.search(joined):
+        return ContentStatus(
+            False,
+            "encoding",
+            "its bytes are binary or not UTF-8/UTF-16/Windows-1252 text "
+            "(convert it to PDF or plain text)",
+        )
     if _FAILED_WARNING.search(joined):
         return ContentStatus(False, "failed", warnings[0] if warnings else "unknown error")
     if _IMAGE_ONLY_WARNING.search(joined):
@@ -596,13 +620,31 @@ def _extract_pdf(data: bytes) -> tuple[list[Section], list[str]]:
     return sections, warnings
 
 
-def _decode_text(data: bytes) -> str:
-    for encoding in ("utf-8", "utf-16", "latin-1"):
+def _looks_binary(data: bytes) -> bool:
+    """Control bytes (other than tab/newline/return) mean this is not text."""
+    sample = data[:4096]
+    if not sample:
+        return False
+    if sample.startswith((b"\xff\xfe", b"\xfe\xff")):
+        return False  # UTF-16 with a BOM is text
+    control = sum(1 for byte in sample if byte < 9 or 13 < byte < 32)
+    return control / len(sample) > 0.05
+
+
+def _decode_text(data: bytes) -> str | None:
+    """Decode text, or None when the bytes are binary / undecodable."""
+    if _looks_binary(data):
+        return None
+    encodings = ["utf-8-sig"]
+    if data.startswith((b"\xff\xfe", b"\xfe\xff")):
+        encodings.append("utf-16")
+    encodings.append("cp1252")
+    for encoding in encodings:
         try:
             return data.decode(encoding)
         except UnicodeDecodeError:
             continue
-    return data.decode("utf-8", errors="replace")
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -637,12 +679,23 @@ def extract_bytes(filename: str, data: bytes) -> Extracted:
         elif suffix == ".ipynb":
             sections, warnings = _extract_ipynb(data)
         elif suffix in _TRANSCRIPT_SUFFIXES:
-            sections, warnings = _extract_transcript(_decode_text(data))
+            decoded = _decode_text(data)
+            if decoded is None:
+                sections, warnings = [], [_BINARY_HINT]
+            else:
+                sections, warnings = _extract_transcript(decoded)
         elif suffix in (".html", ".htm"):
-            text = html_to_text(_decode_text(data))
-            sections, warnings = [Section("Page", text)], []
+            decoded = _decode_text(data)
+            if decoded is None:
+                sections, warnings = [], [_BINARY_HINT]
+            else:
+                sections, warnings = [Section("Page", html_to_text(decoded))], []
         elif suffix in _READABLE_SUFFIXES:
-            sections, warnings = [Section("Text", _decode_text(data))], []
+            decoded = _decode_text(data)
+            if decoded is None:
+                sections, warnings = [], [_BINARY_HINT]
+            else:
+                sections, warnings = [Section("Text", decoded)], []
         else:
             return Extracted(
                 name, kind,
