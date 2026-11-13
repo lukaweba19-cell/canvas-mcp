@@ -1,14 +1,11 @@
 """
-Tool discovery for Canvas MCP.
-Allows Claude to search and explore both the registered MCP tools
-(the ~99 Python tools exposed via @mcp.tool()) and the TypeScript
-code-execution API modules used by execute_typescript().
+Tool discovery for the Canvas student MCP server.
+
+Lets the model search the live registry of student tools by keyword so it can
+find the right one without being handed every description at once.
 """
 
 import json
-import logging
-import re
-from pathlib import Path
 from typing import Any, Literal
 
 from fastmcp import FastMCP
@@ -35,9 +32,6 @@ _MCP_FULL_DESCRIPTION_CHARS = 400
 # dominate the response.
 _MCP_SIGNATURE_DESCRIPTION_CHARS = 200
 
-# Full TypeScript modules can be tens of thousands of characters. Bound each
-# match so discovery cannot consume the model context with source dumps.
-_CODE_API_FULL_CONTENT_CHARS = 2000
 _TRUNCATION_SENTINEL = "... [truncated]"
 
 
@@ -93,87 +87,19 @@ def register_discovery_tools(mcp: FastMCP) -> None:
         detail_level: DetailLevel = "signatures"
     ) -> str:
         """
-        Search available Canvas tools by keyword — both the registered MCP
-        tools (e.g. list_peer_reviews, create_assignment) and the TypeScript
-        code-execution API used by execute_typescript().
+        Search the available student Canvas tools by keyword
+        (e.g. "assignment", "grades", "study", "files").
 
         Args:
             query: Search term to filter tools (empty = all)
-            detail_level: "names" (names/paths only), "signatures" (recommended), or "full" (fuller descriptions/file contents)
+            detail_level: "names" (names only), "signatures" (recommended), or "full" (full descriptions)
         """
         try:
             query_lower = query.lower()
 
             mcp_matches, mcp_tool_count = await _search_mcp_tools(mcp, query_lower, detail_level)
 
-            # Get code API directory
-            code_api_path = Path(__file__).parent.parent / "code_api" / "canvas"
-
-            code_api_matches: list[str | dict[str, Any]] = []
-            code_api_note: str | None = None
-
-            if not code_api_path.exists():
-                code_api_note = "Code API directory not found — the code execution API may not be set up yet"
-            else:
-                for ts_file in code_api_path.rglob("*.ts"):
-                    # Skip index files and utilities unless specifically searched
-                    if ts_file.name == "index.ts" and query and "index" not in query_lower:
-                        continue
-
-                    # Check if query matches filename or path
-                    file_match = (
-                        not query or
-                        query_lower in ts_file.stem.lower() or
-                        query_lower in str(ts_file.relative_to(code_api_path)).lower()
-                    )
-
-                    if not file_match:
-                        # Also check file contents for query
-                        try:
-                            content = ts_file.read_text(encoding="utf-8")
-                            if query_lower not in content.lower():
-                                continue
-                        except Exception as e:
-                            logging.debug("Skipping file %s: %s", ts_file, e)
-                            continue
-
-                    relative_path = str(ts_file.relative_to(code_api_path))
-
-                    if detail_level == "names":
-                        code_api_matches.append(relative_path)
-
-                    elif detail_level == "signatures":
-                        # Extract function signature from file
-                        try:
-                            content = ts_file.read_text(encoding="utf-8")
-                            signature = extract_function_signature(content)
-                            doc_comment = extract_doc_comment(content)
-
-                            code_api_matches.append({
-                                "file": relative_path,
-                                "signature": signature,
-                                "description": doc_comment[:200] if doc_comment else None
-                            })
-                        except Exception as e:
-                            code_api_matches.append({
-                                "file": relative_path,
-                                "error": f"Could not parse signature: {str(e)}"
-                            })
-
-                    else:  # full
-                        try:
-                            content = ts_file.read_text(encoding="utf-8")
-                            code_api_matches.append({
-                                "file": relative_path,
-                                "content": _cap(content, _CODE_API_FULL_CONTENT_CHARS)
-                            })
-                        except Exception as e:
-                            code_api_matches.append({
-                                "file": relative_path,
-                                "error": f"Could not read file: {str(e)}"
-                            })
-
-            total_count = len(mcp_matches) + len(code_api_matches)
+            total_count = len(mcp_matches)
 
             if total_count == 0:
                 return json.dumps({
@@ -188,19 +114,8 @@ def register_discovery_tools(mcp: FastMCP) -> None:
                 "query": query,
                 "detail_level": detail_level,
                 "count": total_count,
-                "mcp_tools": {
-                    "description": "Registered MCP tools (Python, called directly — e.g. list_peer_reviews, create_assignment)",
-                    "count": len(mcp_matches),
-                    "tools": mcp_matches,
-                },
-                "code_execution_api": {
-                    "description": "TypeScript modules usable from execute_typescript() for bulk operations",
-                    "count": len(code_api_matches),
-                    "tools": code_api_matches,
-                },
+                "tools": mcp_matches,
             }
-            if code_api_note:
-                result["code_execution_api"]["note"] = code_api_note
 
             return json.dumps(result, indent=2)
 
@@ -209,35 +124,3 @@ def register_discovery_tools(mcp: FastMCP) -> None:
                 "error": str(e),
                 "type": type(e).__name__
             }, indent=2)
-
-
-def extract_function_signature(content: str) -> str:
-    """Extract main exported function signature from TypeScript file"""
-    # Look for: export async function functionName(args): Promise<Type>
-    pattern = r'export\s+async\s+function\s+(\w+)\s*\([^)]*\)\s*:\s*Promise<[^>]+>'
-    match = re.search(pattern, content)
-
-    if match:
-        return match.group(0)
-
-    # Fallback: just find export async function
-    pattern = r'export\s+async\s+function\s+\w+[^{]+'
-    match = re.search(pattern, content)
-
-    if match:
-        return match.group(0).strip()
-
-    return "No exported function found"
-
-
-def extract_doc_comment(content: str) -> str:
-    """Extract the JSDoc attached to the file's main exported function."""
-    # Prefer the /** ... */ block immediately before `export async function`;
-    # the first block in a file is often a private helper's comment.
-    match = re.search(
-        r'/\*\*((?:(?!\*/).)*?)\*/\s*export\s+async\s+function', content, re.DOTALL
-    ) or re.search(r'/\*\*(.*?)\*/', content, re.DOTALL)
-    if not match:
-        return ""
-    lines = [re.sub(r'^\s*\*\s?', '', line) for line in match.group(1).splitlines()]
-    return "\n".join(lines).strip()

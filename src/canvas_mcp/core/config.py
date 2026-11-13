@@ -14,13 +14,8 @@ load_dotenv()
 _INVALID_INT_ENV_VARS: dict[str, str] = {}
 _INVALID_FLOAT_ENV_VARS: dict[str, str] = {}
 
-VALID_SANDBOX_MODES = frozenset({"auto", "local", "container"})
-
-# Canonical names of the student write tools an operator may enable via
-# STUDENT_WRITE_TOOLS. Declared here rather than in the tools package so config
-# stays free of imports from it. Quiz-taking is deliberately absent: it is an
-# academic-integrity decision gated behind its own separate flag, not something
-# an operator can switch on by naming it in this allowlist.
+# Canonical names of the student write tools that can be enabled. Quiz-taking is
+# deliberately absent: it is an academic-integrity decision of its own.
 STUDENT_WRITE_TOOL_NAMES = frozenset({
     "submit_assignment",
     "comment_on_my_submission",
@@ -100,40 +95,6 @@ def _is_loopback(hostname: str | None) -> bool:
         return False
 
 
-# Canonical checker names accepted in ACCESSIBILITY_CHECKERS, with aliases.
-ACCESSIBILITY_CHECKER_ALIASES: dict[str, str] = {
-    "ufixit": "ufixit",
-    "udoit": "ufixit",
-}
-
-
-def _parse_accessibility_checkers(raw: str) -> frozenset[str]:
-    """Normalise ACCESSIBILITY_CHECKERS to canonical checker names.
-
-    "none" (or an empty value) yields an empty set. Unknown names are dropped
-    with a warning at parse time — validate_config() only runs on the stdio
-    startup path, so deferring the warning there would lose it in HTTP mode.
-    """
-    names = [n.strip().lower() for n in raw.replace(",", " ").split() if n.strip()]
-    known: set[str] = set()
-    unknown: set[str] = set()
-    for name in names:
-        if name == "none":
-            continue
-        canonical = ACCESSIBILITY_CHECKER_ALIASES.get(name)
-        if canonical is None:
-            unknown.add(name)
-        else:
-            known.add(canonical)
-    if unknown:
-        log_warning(
-            "ACCESSIBILITY_CHECKERS names unknown checkers; they will be ignored "
-            f"(known: {', '.join(sorted(ACCESSIBILITY_CHECKER_ALIASES))}, none): "
-            f"{', '.join(sorted(unknown))}"
-        )
-    return frozenset(known)
-
-
 def _bool_env(name: str, default: bool) -> bool:
     value = os.getenv(name)
     if value is None:
@@ -207,30 +168,6 @@ def _float_env(name: str, default: float) -> float:
     return parsed
 
 
-_DEFAULT_TS_SANDBOX_UID_GID = "65532:65532"
-_TS_SANDBOX_UID_GID_PATTERN = re.compile(r"^[0-9]{1,10}:[0-9]{1,10}$")
-
-
-def _parse_ts_sandbox_uid_gid(value: str) -> str:
-    """Return a safe numeric uid:gid for every transport startup path."""
-    if not _TS_SANDBOX_UID_GID_PATTERN.fullmatch(value):
-        log_warning(
-            "TS_SANDBOX_UID_GID should be in <uid>:<gid> numeric form; "
-            f"defaulting to '{_DEFAULT_TS_SANDBOX_UID_GID}' (got '{value}')"
-        )
-        return _DEFAULT_TS_SANDBOX_UID_GID
-
-    uid, gid = (int(part) for part in value.split(":"))
-    if uid == 0 or gid == 0:
-        log_warning(
-            "TS_SANDBOX_UID_GID must use a non-zero uid and non-zero gid; "
-            f"defaulting to '{_DEFAULT_TS_SANDBOX_UID_GID}' (got '{value}')"
-        )
-        return _DEFAULT_TS_SANDBOX_UID_GID
-
-    return value
-
-
 class Config:
     """Configuration class for Canvas MCP server."""
 
@@ -265,36 +202,6 @@ class Config:
         self.log_execution_events = _bool_env("LOG_EXECUTION_EVENTS", False)
         self.audit_log_dir = os.getenv("AUDIT_LOG_DIR", "")
 
-        # Code execution sandbox configuration (secure defaults)
-        self.enable_ts_sandbox = _bool_env("ENABLE_TS_SANDBOX", True)
-        self.ts_sandbox_mode = os.getenv("TS_SANDBOX_MODE", "auto").lower()
-        self.ts_sandbox_block_outbound_network = _bool_env("TS_SANDBOX_BLOCK_OUTBOUND_NETWORK", True)
-        self.ts_sandbox_allowlist_hosts = os.getenv("TS_SANDBOX_ALLOWLIST_HOSTS", "")
-        self.ts_sandbox_cpu_limit = _int_env("TS_SANDBOX_CPU_LIMIT", 30)
-        self.ts_sandbox_memory_limit_mb = _int_env("TS_SANDBOX_MEMORY_LIMIT_MB", 512)
-        self.ts_sandbox_timeout_sec = _int_env("TS_SANDBOX_TIMEOUT_SEC", 120)
-        self.ts_sandbox_container_image = os.getenv("TS_SANDBOX_CONTAINER_IMAGE", "node:20-alpine")
-        self.ts_sandbox_uid_gid = _parse_ts_sandbox_uid_gid(
-            os.getenv("TS_SANDBOX_UID_GID", _DEFAULT_TS_SANDBOX_UID_GID)
-        )
-
-        # Code execution is opt-in — set EXECUTE_TYPESCRIPT_ENABLED=true to
-        # enable the execute_typescript tool (independent of CANVAS_ROLE).
-        # Off by default: arbitrary code execution should be a deliberate
-        # operator choice, not something a default install exposes (#157).
-        self.execute_typescript_enabled = _bool_env("EXECUTE_TYPESCRIPT_ENABLED", False)
-
-        # Accessibility checkers available on this Canvas instance (#325).
-        # The UFIXIT/UDOIT report pipeline (fetch_ufixit_report ->
-        # parse_ufixit_violations -> format_accessibility_summary) only works
-        # where that add-on is installed; institutions without it get three
-        # tools that can never return anything. Comma- or space-separated
-        # names; "ufixit" and "udoit" are aliases. Empty or "none" registers
-        # only the add-on-free built-in scanner. Default keeps today's set.
-        self.accessibility_checkers = _parse_accessibility_checkers(
-            os.getenv("ACCESSIBILITY_CHECKERS", "ufixit")
-        )
-
         # HTTP access-key gate (v1, multi-user). Comma- or whitespace-separated
         # list of accepted keys; an HTTP caller must present a matching
         # X-MCP-Access-Key header. Empty disables the gate (rely on external
@@ -307,63 +214,32 @@ class Config:
         # This makes "fail open" impossible by omission — only by declaration.
         self.mcp_allow_unauthenticated = _bool_env("MCP_ALLOW_UNAUTHENTICATED", False)
 
-        # Entra ID platform auth: when the endpoint is fronted by Azure App
-        # Service authentication, the platform validates the Entra token and
-        # injects a trusted X-MS-CLIENT-PRINCIPAL(-ID) identity header. The app
-        # reads that for per-identity authorization + audit (the token is already
-        # validated upstream). Gate behind a flag so local/stdio runs never trust
-        # the spoofable X-MS-* headers. mcp_entra_allowed_oids is the allowlist of
-        # Entra object IDs permitted to use this server (empty = allow any
-        # platform-authenticated identity).
-        self.entra_auth_enabled = _bool_env("ENTRA_AUTH_ENABLED", False)
-        self.mcp_entra_allowed_oids = _parse_keys(os.getenv("MCP_ENTRA_ALLOWED_OIDS", ""))
-
-        # --- Self-service access-approval flow (hosted-only; off by default) ---
-        # Feature flag. When false (default) the gate behaves exactly as before
-        # and the /admin/access/* routes 404. See internal access-approval spec.
-        self.access_request_enabled = _bool_env("ACCESS_REQUEST_ENABLED", False)
-        # Azure Table Storage overlay (managed-identity auth; no keys).
-        self.access_table_account = os.getenv("ACCESS_TABLE_ACCOUNT", "")
-        self.access_table_name = os.getenv("ACCESS_TABLE_NAME", "accessoverlay")
-        # Azure Communication Services email.
-        self.acs_endpoint = os.getenv("ACS_ENDPOINT", "")
-        self.acs_sender = os.getenv("ACS_SENDER", "")
-        # Admin notification recipients (comma/space separated).
-        self.access_admin_emails = [
-            e.strip()
-            for e in os.getenv("ACCESS_ADMIN_EMAILS", "").replace(",", " ").split()
-            if e.strip()
-        ]
-        # Public base URL used to build approval links (no trailing slash).
-        self.access_approve_base_url = os.getenv("ACCESS_APPROVE_BASE_URL", "").rstrip("/")
-        # HMAC secret for approval tokens; empty disables the feature (fail-closed).
-        self.access_token_secret = os.getenv("ACCESS_TOKEN_SECRET", "")
-        # Suppress re-emailing the admin for the same OID within this window.
-        self.access_notify_cooldown_hours = _int_env("ACCESS_NOTIFY_COOLDOWN_HOURS", 24)
-
-        # Optional metadata
+        # Optional metadata        # Optional metadata
         self.institution_name = os.getenv("INSTITUTION_NAME", "")
         self.timezone = os.getenv("TIMEZONE", "UTC")
 
         # Role-based tool filtering
-        self.canvas_role = os.getenv("CANVAS_ROLE", "all").lower()
+        self.canvas_role = os.getenv("CANVAS_ROLE", "student").lower()
 
         # --- Student write tools (#170) ---
-        # Campus-wide operator ceiling. Empty (the default) means NO student write
-        # tool is registered, so an unlisted tool never enters the MCP tool list at
-        # all. Accepts comma- and/or space-separated tool names.
+        # Operator ceiling for student write tools. This build is student-only,
+        # so all three are enabled by default; an empty value disables them all.
+        # Accepts comma- and/or space-separated tool names.
         self.student_write_tools = frozenset(
             name.strip()
-            for name in os.getenv("STUDENT_WRITE_TOOLS", "").replace(",", " ").split()
+            for name in os.getenv(
+                "STUDENT_WRITE_TOOLS",
+                "submit_assignment,comment_on_my_submission,mark_module_item_done",
+            ).replace(",", " ").split()
             if name.strip()
         )
         # Per-course instructor policy. Can further restrict (never expand) the
         # operator ceiling above.
         self.course_agent_policy_enabled = _bool_env("COURSE_AGENT_POLICY_ENABLED", True)
-        # Posture when a course has no policy artifact. Institutional decision, so
-        # it is operator-configurable; "deny" is the safe default.
+        # Posture when a course states no policy. An instructor can still block
+        # agent writes by putting "agent_writes: deny" in the syllabus.
         self.course_agent_policy_default = os.getenv(
-            "COURSE_AGENT_POLICY_DEFAULT", "deny"
+            "COURSE_AGENT_POLICY_DEFAULT", "allow"
         ).strip().lower()
         # Denials cache longer than grants. A stale grant is a revocation window on
         # an attempt-consuming action, so it is deliberately short.
@@ -465,19 +341,14 @@ def validate_config() -> bool:
             effective=config.canvas_api_url,
         )
 
-    if config.ts_sandbox_mode not in VALID_SANDBOX_MODES:
-        log_warning(
-            "TS_SANDBOX_MODE should be one of auto, local, container; "
-            f"defaulting to 'auto' (got '{config.ts_sandbox_mode}')"
-        )
+    valid_roles = ("student",)
 
-    valid_roles = ("student", "educator", "all")
     if config.canvas_role not in valid_roles:
         log_warning(
             f"CANVAS_ROLE should be one of {', '.join(valid_roles)}; "
             f"defaulting to 'all' (got '{config.canvas_role}')"
         )
-        config.canvas_role = "all"
+        config.canvas_role = "student"
 
     # Student write policy: an unrecognized posture must fail closed, not fall
     # through to something permissive.

@@ -5,8 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "canvas-mcp"
 version = "1.12.0"
-description = "A Model Context Protocol server for Canvas LMS integration"
-readme = "README.md"
+description = "A student-focused Model Context Protocol server for Canvas LMS"
 license = { file = "LICENSE" }
 requires-python = ">=3.11"
 authors = [
@@ -44,13 +43,6 @@ Issues = "https://github.com/vishalsachdev/canvas-mcp/issues"
 
 [project.scripts]
 canvas-mcp-server = "canvas_mcp.server:main"
-
-[project.optional-dependencies]
-hosted = [
-    "azure-data-tables>=12.5.0",
-    "azure-communication-email>=1.0.0",
-    "azure-identity>=1.17.0",
-]
 
 [tool.hatch.version]
 path = "src/canvas_mcp/__init__.py"
@@ -112,12 +104,6 @@ strict_equality = true
 [[tool.mypy.overrides]]
 module = "tests.*"
 disallow_untyped_defs = false
-
-[[tool.mypy.overrides]]
-# Azure SDK packages are optional hosted-deployment deps, not installed in the
-# default dev environment, and ship without type stubs.
-module = "azure.*"
-ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
