@@ -403,9 +403,10 @@ def register_material_tools(mcp: FastMCP) -> None:
         Downloads the file once, extracts text, caches it in the student
         workspace, and by default returns a section index plus the cache path —
         call read_material_section for one section. Pass full_text=True to get
-        the extracted text itself in the same call (cut at a section boundary
-        when it exceeds max_chars, with the next call named). Slide speaker notes
-        are included, since they usually say what matters.
+        the extracted text itself in the same call, stopping at the first section
+        that does not fit max_chars and ending with a note that counts the
+        sections not shown and names the next call. Slide speaker notes are
+        included, since they usually say what matters.
 
         Args:
             course_identifier: Course code or Canvas ID
@@ -628,8 +629,9 @@ def render_extracted_text(
     """The extracted text itself, so one call can read a file end to end.
 
     Non-reading files get the same honest status and reason as the index; a file
-    bigger than ``max_chars`` is cut at a section boundary with the exact next
-    call named, never silently truncated.
+    bigger than ``max_chars`` is cut at the first section that does not fit (later
+    smaller sections are not pulled in behind it) and the trailing note counts
+    exactly how many sections were not shown, with the next call named.
     """
     sections = record.get("sections", [])
     extracted = extract.Extracted(
@@ -649,28 +651,32 @@ def render_extracted_text(
         return "\n".join(lines)
 
     budget = max(1000, max_chars)
+    pending = [(s.label, s.text.strip()) for s in extracted.sections]
+    pending = [(label, text) for label, text in pending if text]
+
     used = 0
     included: list[str] = []
-    skipped: list[str] = []
-    for section in extracted.sections:
-        text = section.text.strip()
-        if not text:
-            continue
-        block = f"## {section.label}\n{text}"
+    cut_at: int | None = None
+    for index, (label, text) in enumerate(pending):
+        block = f"## {label}\n{text}"
         if used + len(block) > budget:
-            skipped.append(section.label)
-            continue
+            cut_at = index
+            break
         included.append(block)
         used += len(block)
 
     lines.append("")
     lines.extend(included)
-    if skipped:
+    if cut_at is not None:
+        rest = pending[cut_at:]
+        labels = ", ".join(label for label, _ in rest[:10])
+        if len(rest) > 10:
+            labels += f" (+{len(rest) - 10} more)"
         lines.append(
-            f"\n...[stopped after {used} characters; {len(skipped)} more section(s): "
-            + ", ".join(skipped[:10])
-            + ". Read them with read_material_section(file_id=..., section='...')"
-            + ", or raise max_chars.]"
+            f"\n...[stopped after {used} characters; {len(rest)} more section(s) "
+            f"not shown, starting at '{rest[0][0]}': {labels}. "
+            "Read them with read_material_section(file_id=..., section='...'), "
+            "or raise max_chars.]"
         )
     return "\n".join(lines)
 

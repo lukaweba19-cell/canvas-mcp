@@ -29,6 +29,17 @@ DECK = build_pptx(
         {"text": "Dijkstra relaxes edges"},
     ]
 )
+# Alternating long/short pages: p.2 is the first that cannot fit in 1000 chars,
+# and p.3/p.5 would fit afterwards, so a skip-and-resume cut would show them.
+LONG = build_text_pdf(
+    [
+        "Page 1 " + "alpha " * 60,
+        "Page 2 " + "beta " * 140,
+        "Page 3 " + "gamma " * 5,
+        "Page 4 " + "delta " * 140,
+        "Page 5 " + "epsilon " * 5,
+    ]
+)
 
 
 class _FileHandler(BaseHTTPRequestHandler):
@@ -54,6 +65,7 @@ def file_server():
     _FileHandler.files = {
         "/lecture.pdf": PDF,
         "/deck.pptx": DECK,
+        "/long.pdf": LONG,
         "/scan.pdf": build_text_pdf(["", ""]),
         "/big.pdf": b"%PDF-1.4\n" + b"x" * (2 * 1024 * 1024),
     }
@@ -126,7 +138,7 @@ async def test_index_mode_still_returns_the_map_not_the_body(canvas, file_server
 async def test_full_text_stops_at_the_budget_and_names_the_next_call(
     canvas, file_server, mcp
 ):
-    _route_file(canvas, file_server, 504, "lecture.pdf", "/lecture.pdf")
+    _route_file(canvas, file_server, 504, "long.pdf", "/long.pdf")
 
     text = await call(
         mcp,
@@ -136,9 +148,21 @@ async def test_full_text_stops_at_the_budget_and_names_the_next_call(
         full_text=True,
         max_chars=1000,
     )
-    assert "## p.1" in text
-    # 1000 characters cannot hold every page here, so the tail must say so.
-    assert "read_material_section" in text or "## p.2" in text
+
+    shown = [n for n in range(1, 6) if f"Page {n} " in text]
+    hidden = [n for n in range(1, 6) if f"Page {n} " not in text]
+    assert shown == [1], text
+    # The cut is where reading stops: later pages that happen to be short must
+    # not be pulled in behind the first page that did not fit.
+    assert hidden == [2, 3, 4, 5], text
+    assert "## p.1" in text and "## p.2" not in text
+
+    # The trailing note must state the exact number of sections left unread.
+    assert "[stopped after " in text
+    assert "4 more section(s) not shown" in text, text
+    assert "starting at 'p.2'" in text
+    assert "read_material_section" in text
+    assert "or raise max_chars" in text
 
 
 async def test_scanned_pdf_full_text_names_image_only_not_empty(
