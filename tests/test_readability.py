@@ -177,6 +177,7 @@ def test_readable_status_always_carries_words(name, data):
             "empty",
             "unsupported",
             "encoding",
+            "legacy_office",
             "failed",
         }
         assert status.label().startswith("NOT readable — ")

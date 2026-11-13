@@ -6,6 +6,7 @@ from fixtures import (
     build_docx,
     build_image_only_pdf,
     build_ipynb,
+    build_legacy_office,
     build_pptx,
     build_text_pdf,
     build_vtt,
@@ -86,6 +87,30 @@ def test_docx_paragraphs_are_extracted():
     )
     assert "First paragraph." in result.text
     assert "Second paragraph." in result.text
+
+
+def test_legacy_doc_is_refused_with_a_conversion_step():
+    result = extract.extract_bytes("notes.doc", build_legacy_office())
+
+    status = result.status
+    assert not status.readable
+    assert status.reason == "legacy_office"
+    assert status.label().startswith("NOT readable — legacy .doc")
+    assert ".docx" in status.label()
+
+
+def test_a_doc_that_is_really_a_docx_is_read():
+    result = extract.extract_bytes("mislabeled.doc", build_docx(["Real paragraph."]))
+
+    assert "Real paragraph." in result.text
+    assert result.status.readable
+
+
+def test_a_doc_with_no_office_magic_is_a_failed_parse():
+    result = extract.extract_bytes("junk.doc", b"definitely not a word file")
+
+    assert not result.status.readable
+    assert result.status.reason == "failed"
 
 
 def test_xlsx_rows_are_read_per_sheet():

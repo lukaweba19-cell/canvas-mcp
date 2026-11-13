@@ -26,6 +26,9 @@ Each file carries a real status, not just a guess from its extension:
 - `NOT readable — empty`: valid file, no content at all.
 - `NOT readable — unsupported format`: video/audio/archive; look for a
   caption/transcript file instead (Panopto/Kaltura links are the same story).
+- `NOT readable — legacy .doc` (also `.ppt`/`.xls`): Word/PowerPoint/Excel
+  97-2003 binary files. They cannot be parsed without a converter, so tell the
+  student to save them as .docx/.pptx/.xlsx or PDF and read that instead.
 - `NOT readable — unsupported encoding`: the bytes are binary or in an encoding
   that is not UTF-8/UTF-16/Windows-1252, so there is no text to pull out. This
   is not an empty file. Ask for a PDF or plain-text copy.

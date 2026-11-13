@@ -34,6 +34,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from xml.etree import ElementTree
 
+from pypdf import PdfReader
+
 from . import ocr
 
 # OOXML namespaces
@@ -59,6 +61,22 @@ _READABLE_SUFFIXES = {
     # Caption tracks and lecture transcripts: the readable form of a video.
     ".vtt", ".srt", ".webvtt",
 }
+
+# Legacy Office binaries (Word 97-2003 and friends) are OLE compound files, not
+# text; parsing them properly needs a converter. A .doc that is really a .docx
+# (a common mislabel) is read as its real format, and a true legacy binary gets
+# an explicit conversion instruction instead of a vague "unsupported format".
+_LEGACY_OFFICE = {
+    ".doc": (".docx", "Word 97-2003"),
+    ".ppt": (".pptx", "PowerPoint 97-2003"),
+    ".xls": (".xlsx", "Excel 97-2003"),
+}
+_ZIP_MAGIC = b"PK\x03\x04"
+_OLE_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
+_LEGACY_CONVERSION = (
+    "open it in Word, Google Docs or LibreOffice and save it as .docx (or PDF), "
+    "then read that file"
+)
 
 _TRANSCRIPT_SUFFIXES = {".vtt", ".srt", ".webvtt"}
 
@@ -165,8 +183,11 @@ _ENCODING_WARNING = re.compile(
     r"unsupported text encoding|unsupported encoding|binary file|binary bytes",
     re.IGNORECASE,
 )
+_LEGACY_WARNING = re.compile(
+    r"legacy (Word|PowerPoint|Excel) 97", re.IGNORECASE
+)
 _FAILED_WARNING = re.compile(
-    r"corrupt|extraction failed|could not be read|not valid", re.IGNORECASE
+    r"corrupt|extraction failed|could not be read|not (a )?valid", re.IGNORECASE
 )
 _BINARY_HINT = (
     "File is binary or in an unsupported text encoding (tried UTF-8, UTF-16 and "
@@ -179,6 +200,7 @@ REASON_LABELS = {
     "empty": "empty",
     "unsupported": "unsupported format",
     "encoding": "unsupported encoding",
+    "legacy_office": "legacy Office file",
     "failed": "extraction failed",
     "quiz": "quiz",
     "embedded": "embedded video/LTI",
@@ -239,6 +261,11 @@ def status_from_parts(
     joined = " ".join(warnings)
     if _UNSUPPORTED_WARNING.search(joined):
         return ContentStatus(False, "unsupported", _unsupported_detail(filename))
+    if _LEGACY_WARNING.search(joined):
+        suffix = Path(filename).suffix.lower()
+        return ContentStatus(
+            False, "legacy_office", _LEGACY_CONVERSION, kind=f"legacy {suffix}"
+        )
     if _ENCODING_WARNING.search(joined):
         return ContentStatus(
             False,
@@ -266,6 +293,11 @@ def status_for(filename: str, record: dict | None = None) -> ContentStatus:
         ]
         return status_from_parts(filename, sections, list(record.get("warnings") or []))
 
+    suffix = Path(filename).suffix.lower()
+    if suffix in _LEGACY_OFFICE:
+        return ContentStatus(
+            False, "legacy_office", _LEGACY_CONVERSION, kind=f"legacy {suffix}"
+        )
     if not is_readable(filename):
         return ContentStatus(False, "unsupported", _unsupported_detail(filename))
     return ContentStatus(
@@ -546,14 +578,6 @@ def _extract_transcript(text: str) -> tuple[list[Section], list[str]]:
 
 
 def _extract_pdf(data: bytes) -> tuple[list[Section], list[str]]:
-    try:
-        from pypdf import PdfReader
-    except ImportError:
-        return [], [
-            "PDF support requires the 'pypdf' package. Install it with "
-            "`uv sync` (or `pip install pypdf`) and try again."
-        ]
-
     warnings: list[str] = []
     reader = PdfReader(io.BytesIO(data))
     sections: list[Section] = []
@@ -658,6 +682,29 @@ def extract_bytes(filename: str, data: bytes) -> Extracted:
     name = filename or "file"
     suffix = Path(name).suffix.lower()
     kind = suffix.lstrip(".") or "unknown"
+
+    if suffix in _LEGACY_OFFICE:
+        modern_suffix, family = _LEGACY_OFFICE[suffix]
+        if data.startswith(_ZIP_MAGIC):
+            # Mislabeled modern file: read it as what it really is.
+            return extract_bytes(Path(name).with_suffix(modern_suffix).name, data)
+        if data.startswith(_OLE_MAGIC):
+            return Extracted(
+                name,
+                kind,
+                warnings=[
+                    f"'{suffix}' is a legacy {family} binary document, not text. "
+                    f"To read it, {_LEGACY_CONVERSION}."
+                ],
+            )
+        return Extracted(
+            name,
+            kind,
+            warnings=[
+                f"'{suffix}' is not a valid {family} document (neither a modern "
+                "Office file nor a legacy OLE binary)."
+            ],
+        )
 
     if len(data) > MAX_EXTRACT_BYTES:
         return Extracted(

@@ -53,6 +53,7 @@ _STATUS_ORDER = {
     "embedded": 0,
     "external": 0,
     "unknown_item": 0,
+    "legacy_office": 0,
     "not_read": 1,
     "text": 2,
 }
@@ -108,7 +109,14 @@ def readiness_lines(
         )
     if unread:
         summary.append(f"{unread} unread")
-    for reason in ("image_only", "empty", "unsupported", "encoding", "failed"):
+    for reason in (
+        "image_only",
+        "empty",
+        "unsupported",
+        "encoding",
+        "legacy_office",
+        "failed",
+    ):
         if reasons.get(reason):
             summary.append(
                 f"{reasons[reason]} NOT readable ({extract.REASON_LABELS[reason]})"
@@ -383,6 +391,11 @@ def register_material_tools(mcp: FastMCP) -> None:
     ) -> str:
         """Extract the text of a course file (PDF, slides, Word, Excel, notebook).
 
+        Scanned PDFs and screenshot decks are OCR'd with the built-in engine.
+        Legacy Word/PowerPoint/Excel binaries (.doc/.ppt/.xls) cannot be parsed
+        without a converter, and come back as an explicit refusal with the
+        conversion step instead of an empty result.
+
         Downloads the file once, extracts text, caches it in the student
         workspace, and returns a section index plus the cache path — NOT the
         whole text. Read individual sections with read_material_section. Slide
@@ -608,6 +621,12 @@ def _describe_cached(record: dict[str, Any], cache_path: str) -> str:
             lines.append(
                 "\nThis file has no readable text: its bytes are binary or not "
                 "UTF-8/UTF-16/Windows-1252 text. Ask for a PDF or plain-text copy."
+            )
+        elif status.reason == "legacy_office":
+            lines.append(
+                "\nThis is a legacy Office binary file, not text. To read it, "
+                + status.detail
+                + "."
             )
         elif status.reason == "failed":
             lines.append(f"\nExtraction failed: {status.detail}")

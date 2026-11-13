@@ -171,11 +171,16 @@ def build_image_only_pdf(jpegs: list[tuple[bytes, int, int]]) -> bytes:
     return _pdf(objects)
 
 
+def build_legacy_office(payload: bytes = b"Word 97 binary body") -> bytes:
+    """Bytes shaped like a legacy Word .doc: the OLE compound-file magic + body."""
+    return b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1" + b"\x00" * 16 + payload
+
+
 def jpeg_with_text(text: str, width: int = 1200, height: int = 300) -> tuple[bytes, int, int]:
     """Render text into a JPEG so OCR has something real to recognise.
 
-    Requires Pillow, which ships with the optional ``ocr`` extra; callers that
-    need it should ``pytest.importorskip("PIL")`` first.
+    Pillow is a normal dependency (OCR ships with the server), so this is
+    always available.
     """
     import io as _io
 
