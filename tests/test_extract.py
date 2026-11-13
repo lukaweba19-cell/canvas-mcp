@@ -5,9 +5,11 @@ from __future__ import annotations
 from fixtures import (
     build_docx,
     build_image_only_pdf,
+    build_ipynb,
     build_pptx,
     build_text_pdf,
     build_vtt,
+    build_xlsx,
     jpeg_with_text,
 )
 
@@ -33,11 +35,14 @@ class FakeOcr:
         return self.text
 
 
-def _no_ocr(monkeypatch) -> None:
-    """Simulate a machine without the optional extra, using the real detector."""
-    ocr.reset_detection_cache()
-    monkeypatch.setattr(ocr, "_module_present", lambda name: False)
-    ocr.reset_detection_cache()
+def _broken_ocr(monkeypatch) -> None:
+    """Simulate an incomplete install whose bundled OCR cannot load."""
+    message = (
+        "OCR is bundled with canvas-mcp but its engine did not load "
+        "(simulated broken install). Reinstall it with `uv sync --reinstall`."
+    )
+    monkeypatch.setattr(ocr, "backend", lambda: None)
+    monkeypatch.setattr(ocr, "unavailable_reason", lambda: message)
 
 
 def test_pptx_extracts_slides_and_speaker_notes():
@@ -83,6 +88,24 @@ def test_docx_paragraphs_are_extracted():
     assert "Second paragraph." in result.text
 
 
+def test_xlsx_rows_are_read_per_sheet():
+    result = extract.extract_bytes(
+        "grades.xlsx", build_xlsx([["Student", "Grade"], ["Ada", "92"]])
+    )
+    assert result.sections[0].label == "Sheet 1"
+    assert "Ada | 92" in result.text
+    assert result.status.readable
+
+
+def test_ipynb_cells_are_read():
+    result = extract.extract_bytes(
+        "hw.ipynb", build_ipynb(["# Imports", "print('hello')"])
+    )
+    assert result.sections[0].label == "Cell 1"
+    assert "print('hello')" in result.text
+    assert result.status.readable
+
+
 def test_pdf_text_layer_is_read_per_page():
     result = extract.extract_bytes(
         "slides.pdf", build_text_pdf(["Introduction to trees", "Depth first search"])
@@ -92,13 +115,13 @@ def test_pdf_text_layer_is_read_per_page():
     assert not any("OCR" in warning for warning in result.warnings)
 
 
-def test_image_only_pdf_without_ocr_explains_the_fix(monkeypatch):
-    _no_ocr(monkeypatch)
+def test_image_only_pdf_with_a_broken_ocr_install_explains_the_fix(monkeypatch):
+    _broken_ocr(monkeypatch)
     result = extract.extract_bytes("scan.pdf", build_text_pdf(["", ""]))
 
     joined = " ".join(result.warnings)
     assert "2 of 2 pages have no text layer" in joined
-    assert "uv sync --extra ocr" in joined
+    assert "OCR is bundled with canvas-mcp" in joined
     # Empty sections are reported as unreadable, never as "the file is empty".
     assert result.unreadable == ["p.1", "p.2"]
     assert result.word_count == 0
@@ -118,24 +141,9 @@ def test_image_only_pdf_uses_ocr_when_available(monkeypatch):
 
 
 def test_image_only_pdf_real_ocr_reads_rendered_text():
-    """The optional extra really works: a JPEG-only PDF becomes text."""
-    import importlib.util
-
-    import pytest
-
-    missing = [
-        name
-        for name in ("PIL", "pypdfium2", "rapidocr_onnxruntime")
-        if importlib.util.find_spec(name) is None
-    ]
+    """Built-in OCR really works: a JPEG-only PDF becomes text."""
     ocr.reset_detection_cache()
-    if missing or not ocr.is_available():
-        pytest.skip(
-            "OCR extra not installed"
-            + (f" (missing: {', '.join(missing)})" if missing else "")
-            + f"; runtime says: {ocr.unavailable_reason()}. "
-            "Run `uv sync --extra ocr` to run this test."
-        )
+    assert ocr.is_available(), ocr.unavailable_reason()
 
     jpeg, width, height = jpeg_with_text("RECURSION BASE CASE")
     result = extract.extract_bytes("scan.pdf", build_image_only_pdf([(jpeg, width, height)]))
@@ -157,15 +165,15 @@ def test_screenshot_slide_is_ocrd_from_its_image(monkeypatch):
     assert result.unreadable == []
 
 
-def test_screenshot_slide_without_ocr_is_reported_not_blank(monkeypatch):
-    _no_ocr(monkeypatch)
+def test_screenshot_slide_with_a_broken_ocr_install_is_reported_not_blank(monkeypatch):
+    _broken_ocr(monkeypatch)
     data = build_pptx([{"text": "", "images": [("image1.png", b"png-bytes")]}])
 
     result = extract.extract_bytes("deck.pptx", data)
 
     joined = " ".join(result.warnings)
     assert "1 of 1 slides contain no extractable text" in joined
-    assert "uv sync --extra ocr" in joined
+    assert "OCR is bundled with canvas-mcp" in joined
     assert result.unreadable == ["Slide 1"]
 
 

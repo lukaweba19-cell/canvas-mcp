@@ -28,3 +28,15 @@ def token_in(preview: str) -> str:
     match = _TOKEN_RE.search(preview)
     assert match, f"preview contained no confirmation token:\n{preview}"
     return match.group(1)
+
+
+class BlankOcr:
+    """An OCR engine that recognises nothing, like a blank or unusable image."""
+
+    name = "blank"
+
+    def pdf_page_images(self, data: bytes, page_numbers: list[int]) -> list[bytes]:
+        return [b"blank-page" for _ in page_numbers]
+
+    def recognize(self, image: bytes) -> str:
+        return ""

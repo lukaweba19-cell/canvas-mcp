@@ -9,7 +9,7 @@ import pytest
 from fixtures import build_pptx, build_text_pdf
 from helpers import call
 
-from canvas_mcp.core import extract, ocr
+from canvas_mcp.core import extract
 from canvas_mcp.tools import materials as materials_module
 
 COURSE = {"id": 225, "course_code": "CS225", "name": "Algorithms"}
@@ -33,16 +33,6 @@ PAYLOADS = {
 }
 
 _WORDS_EXTRACTED = re.compile(r"readable — \d+ words extracted")
-
-
-@pytest.fixture
-def no_ocr(monkeypatch):
-    """A machine without the optional OCR extra, using the real detector."""
-    ocr.reset_detection_cache()
-    monkeypatch.setattr(ocr, "_module_present", lambda name: False)
-    ocr.reset_detection_cache()
-    yield
-    ocr.reset_detection_cache()
 
 
 @pytest.fixture
@@ -73,22 +63,24 @@ def _line(report: str, needle: str) -> str:
     return next(line for line in report.splitlines() if needle in line)
 
 
-async def test_image_only_pdf_is_never_reported_readable(course, no_ocr, mcp):
+async def test_image_only_pdf_is_never_reported_readable(course, blank_ocr, mcp):
     read = await call(mcp, "read_course_material", course_identifier=225, file_id=101)
 
     # The extraction itself must state the real reason, not an empty success.
     assert "Status: NOT readable — image-only" in read
-    assert "uv sync --extra ocr" in read
+    assert "OCR ran but found no text" in read
     assert not _WORDS_EXTRACTED.search(read), "no readable claim without text"
 
     report = await call(mcp, "get_course_content_map", course_identifier=225)
     line = _line(report, "file_id=101")
     assert "NOT readable — image-only" in line
     assert not _WORDS_EXTRACTED.search(line)
-    assert "needs OCR" not in line.lower() or "uv sync --extra ocr" in line
+    assert "OCR ran but found no text" in line
 
 
-async def test_screenshot_slide_is_not_reported_readable(course, no_ocr, mcp, monkeypatch):
+async def test_screenshot_slide_is_not_reported_readable(
+    course, blank_ocr, mcp, monkeypatch
+):
     async def screenshot_deck(url: str):
         return build_pptx([{"text": "", "images": [("image1.png", b"png-bytes")]}]), None
 
@@ -97,7 +89,7 @@ async def test_screenshot_slide_is_not_reported_readable(course, no_ocr, mcp, mo
     read = await call(mcp, "read_course_material", course_identifier=225, file_id=102)
 
     assert "Status: NOT readable — image-only" in read
-    assert "uv sync --extra ocr" in read
+    assert "OCR ran but found no text" in read
     assert not _WORDS_EXTRACTED.search(read)
 
 
@@ -147,7 +139,7 @@ async def test_unsupported_format_is_named_not_called_empty(course, mcp):
     assert not _WORDS_EXTRACTED.search(read)
 
 
-async def test_file_listing_carries_status_per_file(course, no_ocr, mcp):
+async def test_file_listing_carries_status_per_file(course, blank_ocr, mcp):
     await call(mcp, "read_course_material", course_identifier=225, file_id=102)
     await call(mcp, "read_course_material", course_identifier=225, file_id=101)
 

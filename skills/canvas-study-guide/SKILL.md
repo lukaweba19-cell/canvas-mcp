@@ -20,8 +20,9 @@ Each file carries a real status, not just a guess from its extension:
 - `unread — extractable format`: never opened yet; call `read_course_material`
   (or `read_course_file`) before deciding anything about it.
 - `NOT readable — image-only`: every page/slide is a picture with no text
-  layer. Say so, suggest `uv sync --extra ocr` (a re-read with OCR enabled, or a
-  posted transcript, is the only way in), and name it in the coverage report.
+  layer and built-in OCR found nothing in it. Say so, suggest a re-read with
+  `refresh=true` (a better scan, or a posted transcript, is the only way in), and
+  name it in the coverage report.
 - `NOT readable — empty`: valid file, no content at all.
 - `NOT readable — unsupported format`: video/audio/archive; look for a
   caption/transcript file instead (Panopto/Kaltura links are the same story).

@@ -9,7 +9,6 @@ import pytest
 from fixtures import build_pptx, build_text_pdf
 from helpers import call
 
-from canvas_mcp.core import ocr
 from canvas_mcp.tools import materials as materials_module
 
 COURSE = {"id": 225, "course_code": "CS225", "name": "Algorithms"}
@@ -31,15 +30,6 @@ PAYLOADS = {
 }
 
 _WORDS = re.compile(r"readable — \d+ words extracted")
-
-
-@pytest.fixture
-def no_ocr(monkeypatch):
-    ocr.reset_detection_cache()
-    monkeypatch.setattr(ocr, "_module_present", lambda name: False)
-    ocr.reset_detection_cache()
-    yield
-    ocr.reset_detection_cache()
 
 
 @pytest.fixture
@@ -116,7 +106,7 @@ def _line(report: str, needle: str) -> str:
     return next(line for line in report.splitlines() if needle in line)
 
 
-async def test_assignment_brief_reports_attachment_status(course, no_ocr, mcp):
+async def test_assignment_brief_reports_attachment_status(course, blank_ocr, mcp):
     brief = await call(
         mcp, "get_my_assignment_brief", course_identifier=225, assignment_id=900
     )
@@ -134,7 +124,7 @@ async def test_assignment_brief_reports_attachment_status(course, no_ocr, mcp):
 
     scan = _line(brief, "scan.pdf")
     assert "NOT readable — image-only" in scan
-    assert "uv sync --extra ocr" in scan
+    assert "OCR ran but found no text" in scan
     assert not _WORDS.search(scan)
 
     chapter = _line(brief, "file_id=202")
@@ -166,7 +156,7 @@ async def test_assignment_brief_without_attachments_says_so(course, mcp):
     assert not _WORDS.search(brief)
 
 
-async def test_week_plan_reports_material_readiness(course, no_ocr, mcp):
+async def test_week_plan_reports_material_readiness(course, blank_ocr, mcp):
     await call(mcp, "read_course_material", course_identifier=225, file_id=201)
     await call(mcp, "read_course_material", course_identifier=225, file_id=203)
     await call(mcp, "read_course_material", course_identifier=225, file_id=204)
@@ -207,7 +197,7 @@ async def test_unsupported_encoding_is_named_everywhere(course, mcp):
     assert "NOT readable — unsupported encoding" in _line(listing, "notes.txt")
 
 
-async def test_section_read_reports_the_file_status(course, no_ocr, mcp):
+async def test_section_read_reports_the_file_status(course, blank_ocr, mcp):
     await call(mcp, "read_course_material", course_identifier=225, file_id=201)
     await call(mcp, "read_course_material", course_identifier=225, file_id=203)
 

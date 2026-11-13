@@ -179,7 +179,11 @@ def test_env_template_documents_the_workspace_and_write_switches():
     assert "STUDENT_WRITE_TOOLS" in text
 
 
-def test_ocr_extra_is_declared():
+def test_ocr_ships_as_a_normal_dependency():
     text = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
-    assert "[project.optional-dependencies]" in text
-    assert "rapidocr" in text
+    assert "[project.optional-dependencies]" not in text, "nothing should be optional"
+    dependencies = text.split("dependencies = [", 1)[1].split("]", 1)[0]
+    assert "rapidocr" in dependencies
+    assert "pypdfium2" in dependencies
+    assert "pillow" in dependencies
+    assert "pypdf" in dependencies

@@ -485,7 +485,7 @@ def register_material_tools(mcp: FastMCP) -> None:
                 )
                 if ocr.is_available():
                     hint += (
-                        "OCR is installed but found nothing readable here — re-run "
+                        "Built-in OCR found nothing readable here — re-run "
                         "read_course_material with refresh=true, or view the page in Canvas."
                     )
                 else:
@@ -597,10 +597,12 @@ def _describe_cached(record: dict[str, Any], cache_path: str) -> str:
             )
         elif status.reason == "image_only":
             lines.append(
-                "\nNo text exists in this file: every page/slide is an image. Reading it "
-                "needs OCR (" + ("available, but it found no text" if ocr.is_available()
-                else "install it with `uv sync --extra ocr`") + "), or a transcript if "
-                "one is posted."
+                "\nNo text exists in this file: every page/slide is an image. Built-in "
+                "OCR "
+                + ("ran and found no text in it" if ocr.is_available()
+                   else f"could not run ({ocr.unavailable_reason()})")
+                + ", so the text has to come from a better scan or a transcript if one "
+                "is posted."
             )
         elif status.reason == "encoding":
             lines.append(

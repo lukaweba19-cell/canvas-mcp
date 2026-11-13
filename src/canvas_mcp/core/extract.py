@@ -17,10 +17,10 @@ Everything else (images, audio, video, archives) is reported as unreadable
 rather than silently returning garbage.
 
 Image-only content (a scanned PDF, a deck exported as screenshots) goes through
-``core.ocr`` when the optional extra is installed. When it is not, the section
-keeps a label with no text and the caller gets a warning that counts the
-affected pages and names the install command — never a blank result passed off
-as "the file is empty".
+``core.ocr``, which ships with canvas-mcp. If OCR finds nothing, or a broken
+install stops it from running, the section keeps a label with no text and the
+caller gets a warning that counts the affected pages and names the real reason —
+never a blank result passed off as "the file is empty".
 """
 
 from __future__ import annotations
@@ -212,9 +212,10 @@ class ContentStatus:
 
 
 def _ocr_hint() -> str:
-    if ocr.is_available():
-        return "OCR is installed but found no text"
-    return "install OCR with `uv sync --extra ocr`"
+    reason = ocr.unavailable_reason()
+    if reason:
+        return f"OCR could not run: {reason}"
+    return "OCR ran but found no text in it"
 
 
 def _unsupported_detail(filename: str) -> str:

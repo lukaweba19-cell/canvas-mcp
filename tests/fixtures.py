@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import io
+import io as _io
+import json
 import zipfile
 from xml.sax.saxutils import escape
 
@@ -196,3 +198,30 @@ def build_vtt(cues: list[str]) -> str:
         end = f"00:00:{index + 1:02d}.000"
         lines.extend([str(index), f"{start} --> {end}", cue, ""])
     return "\n".join(lines)
+
+
+def build_xlsx(rows: list[list[str]], sheet: int = 1) -> bytes:
+    """A minimal XLSX with one worksheet of plain value cells."""
+    cells = []
+    for row_index, row in enumerate(rows, start=1):
+        row_cells = "".join(
+            f"<c r='{chr(65 + column_index)}{row_index}'><v>{value}</v></c>"
+            for column_index, value in enumerate(row)
+        )
+        cells.append(f"<row r='{row_index}'>{row_cells}</row>")
+    sheet_xml = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+        f"<sheetData>{''.join(cells)}</sheetData></worksheet>"
+    )
+    buffer = _io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr(f"xl/worksheets/sheet{sheet}.xml", sheet_xml)
+    return buffer.getvalue()
+
+
+def build_ipynb(cells: list[str]) -> bytes:
+    """A minimal notebook, one markdown cell per string."""
+    return json.dumps(
+        {"cells": [{"cell_type": "markdown", "source": cell} for cell in cells]}
+    ).encode()

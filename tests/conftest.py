@@ -83,6 +83,17 @@ _CANVAS_MODULES = (
 )
 
 
+@pytest.fixture
+def blank_ocr(monkeypatch):
+    """Built-in OCR that runs but finds no text (blank or unusable images)."""
+    from helpers import BlankOcr
+
+    from canvas_mcp.core import ocr
+
+    monkeypatch.setattr(ocr, "backend", lambda: BlankOcr())
+    yield
+
+
 @pytest.fixture(autouse=True)
 def isolated_workspace(tmp_path, monkeypatch):
     """Fresh student directory, fresh caches, no confirmation state."""

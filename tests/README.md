@@ -6,14 +6,14 @@ One command, from a clean checkout:
 uv run pytest
 ```
 
-`uv sync` installs the `dev` group (pytest, pytest-asyncio, ruff).
+`uv sync` installs the runtime dependencies — OCR, PDF and Office reading are
+all built in, not extras — plus the `dev` group (pytest, pytest-asyncio, ruff).
 
-The whole suite passes without the optional OCR extra. The one test that needs a
-real OCR engine skips itself with a message naming the missing pieces; run it
-with:
+Every test runs on a normal install, including the one that OCRs a rendered
+image; nothing is skipped:
 
 ```bash
-uv sync --extra ocr && uv run pytest
+uv sync && uv run pytest
 ```
 
 Every test writes only to pytest's `tmp_path` (via `CANVAS_STUDENT_DIR`) and
