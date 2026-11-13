@@ -119,14 +119,23 @@ def test_image_only_pdf_uses_ocr_when_available(monkeypatch):
 
 def test_image_only_pdf_real_ocr_reads_rendered_text():
     """The optional extra really works: a JPEG-only PDF becomes text."""
+    import importlib.util
+
     import pytest
 
-    pytest.importorskip("PIL")
-    pytest.importorskip("pypdfium2")
-    pytest.importorskip("rapidocr_onnxruntime")
+    missing = [
+        name
+        for name in ("PIL", "pypdfium2", "rapidocr_onnxruntime")
+        if importlib.util.find_spec(name) is None
+    ]
     ocr.reset_detection_cache()
-    if not ocr.is_available():
-        pytest.skip(f"OCR unavailable here: {ocr.unavailable_reason()}")
+    if missing or not ocr.is_available():
+        pytest.skip(
+            "OCR extra not installed"
+            + (f" (missing: {', '.join(missing)})" if missing else "")
+            + f"; runtime says: {ocr.unavailable_reason()}. "
+            "Run `uv sync --extra ocr` to run this test."
+        )
 
     jpeg, width, height = jpeg_with_text("RECURSION BASE CASE")
     result = extract.extract_bytes("scan.pdf", build_image_only_pdf([(jpeg, width, height)]))

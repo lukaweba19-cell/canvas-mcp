@@ -32,16 +32,32 @@ _MAX_TOC_LINES = 60
 def _cache_file(
     course_identifier: str | int, course_code: str | None, file_id: str | int, filename: str
 ) -> Path:
-    directory = student_store.materials_dir(course_identifier, course_code)
-    return directory / f"{file_id}-{student_store.slug(filename, 50)}.json"
+    return student_store.material_cache_path(
+        course_identifier, file_id, filename, course_code
+    )
 
 
 def _find_cache(
     course_identifier: str | int, course_code: str | None, file_id: str | int
 ) -> Path | None:
-    directory = student_store.materials_dir(course_identifier, course_code)
-    matches = sorted(directory.glob(f"{file_id}-*.json"))
-    return matches[0] if matches else None
+    return student_store.find_material_cache(course_identifier, file_id, course_code)
+
+
+def _statuses_for(
+    course_identifier: str | int,
+    course_code: str | None,
+    file_list: list[dict[str, Any]],
+) -> dict[str, extract.ContentStatus]:
+    """Content status for every course file that has been extracted already."""
+    return {
+        str(entry.get("id")): extract.status_for(
+            _file_name(entry),
+            student_store.load_material_record(
+                course_identifier, entry.get("id"), course_code
+            ),
+        )
+        for entry in file_list
+    }
 
 
 def _load_cache(path: Path) -> dict[str, Any] | None:
@@ -97,6 +113,7 @@ def _item_guidance(
     item: dict[str, Any],
     files_by_id: dict[str, dict[str, Any]],
     transcripts: list[dict[str, Any]],
+    statuses: dict[str, extract.ContentStatus],
 ) -> str:
     """How readable one module item is, and what to call for it.
 
@@ -119,14 +136,16 @@ def _item_guidance(
     if item_type == "File":
         entry = files_by_id.get(str(item.get("content_id")))
         if entry is None:
-            return "read_course_material (file not in the course file list — try it)"
-        name = _file_name(entry)
-        if extract.is_readable(name):
-            return f"read_course_material — readable ({extract.Path(name).suffix.lower()})"
-        return (
-            f"NOT readable as text ({extract.Path(name).suffix.lower() or 'no extension'}); "
-            "download it with download_course_file and open it"
+            return (
+                "unread — file is not in the course file list; call "
+                "read_course_material with this content_id to check"
+            )
+        status = statuses.get(str(item.get("content_id"))) or extract.status_for(
+            _file_name(entry)
         )
+        if status.reason == "not_read":
+            return f"{status.label()}"
+        return status.label()
     if item_type in ("ExternalTool", "ExternalUrl"):
         transcript = _matching_transcript(title, transcripts)
         url = item.get("external_url") or item.get("url")
@@ -196,6 +215,7 @@ def register_material_tools(mcp: FastMCP) -> None:
         transcripts = [
             entry for entry in file_list if extract.is_transcript(_file_name(entry))
         ]
+        statuses = _statuses_for(course_id, course_display, file_list)
 
         modules = await fetch_all_paginated_results(
             f"/courses/{course_id}/modules", {"per_page": 100, "include[]": ["items"]}
@@ -221,7 +241,7 @@ def register_material_tools(mcp: FastMCP) -> None:
                         f"- [{item.get('type', 'Unknown')}] "
                         f"{fence_untrusted_inline(item.get('title', 'Untitled'), 'module item title')}"
                         f" ({', '.join(ids) or 'no content id'}) -> "
-                        f"{_item_guidance(item, files_by_id, transcripts)}"
+                        f"{_item_guidance(item, files_by_id, transcripts, statuses)}"
                     )
 
         lines.append("\n## Course files")
@@ -232,24 +252,21 @@ def register_material_tools(mcp: FastMCP) -> None:
         else:
             for entry in file_list:
                 name = _file_name(entry)
-                if extract.is_transcript(name):
-                    readable = "readable (captions/transcript)"
-                elif extract.is_readable(name):
-                    readable = "readable"
-                else:
-                    readable = "NOT readable as text — download_course_file and open it"
+                status = statuses[str(entry.get("id"))]
                 lines.append(
                     f"- file_id={entry.get('id')} {fence_untrusted_inline(name, 'file name')}"
-                    f" ({readable})"
+                    f" ({status.label()})"
                 )
 
         if transcripts:
             lines.append("\n## Captions and transcripts")
             for entry in transcripts:
+                status = statuses[str(entry.get("id"))]
                 lines.append(
                     f"- file_id={entry.get('id')} "
                     f"{fence_untrusted_inline(_file_name(entry), 'transcript name')} — "
-                    "read_course_material returns the spoken text without timestamps"
+                    f"{status.label()}; read_course_material returns the spoken text "
+                    "without timestamps"
                 )
 
         return "\n".join(lines)
@@ -433,10 +450,13 @@ def _describe_cached(record: dict[str, Any], cache_path: str) -> str:
         filename=record.get("filename", "file"),
         kind=record.get("kind", "unknown"),
         sections=[extract.Section(item["label"], item["text"]) for item in sections],
+        warnings=list(record.get("warnings") or []),
     )
+    status = extracted.status
     lines = [
         f"Extracted: {fence_untrusted_inline(record.get('filename', 'file'), 'file name')}",
         f"Type: {record.get('kind')} | sections: {len(sections)} | words: {extracted.word_count}",
+        f"Status: {status.label()}",
         f"Cache: {cache_path}",
     ]
     if record.get("warnings"):
@@ -451,17 +471,26 @@ def _describe_cached(record: dict[str, Any], cache_path: str) -> str:
             lines.append("  " + ocr.unavailable_reason())
 
     if not extracted.word_count:
-        if not extract.is_readable(record.get("filename", "")):
+        if status.reason == "unsupported":
             lines.append(
                 "\nThis file type cannot be read as text at all (audio, video, image or "
                 "archive). Nothing was skipped silently: for a lecture video, look for a "
                 "caption/transcript file (.vtt/.srt) — get_course_content_map lists any "
                 "that exist and names the matching file_id."
             )
+        elif status.reason == "image_only":
+            lines.append(
+                "\nNo text exists in this file: every page/slide is an image. Reading it "
+                "needs OCR (" + ("available, but it found no text" if ocr.is_available()
+                else "install it with `uv sync --extra ocr`") + "), or a transcript if "
+                "one is posted."
+            )
+        elif status.reason == "failed":
+            lines.append(f"\nExtraction failed: {status.detail}")
         else:
             lines.append(
-                "\nNo readable text was extracted from this file. It is image-only, so the "
-                "text has to come from OCR (or from a transcript, if one is posted)."
+                "\nThis file is empty: it contains no text at all (not image-only, just "
+                "no content), so there is nothing to read."
             )
         return "\n".join(lines)
 

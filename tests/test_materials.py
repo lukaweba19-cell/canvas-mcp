@@ -93,21 +93,25 @@ async def test_content_map_marks_lti_and_offers_the_transcript(course, mcp):
     assert "NOT readable" in quiz
 
 
-async def test_content_map_never_marks_a_video_file_readable(course, mcp):
+async def test_content_map_does_not_call_unread_files_readable(course, mcp):
     report = await call(mcp, "get_course_content_map", course_identifier=225)
 
     video = next(line for line in report.splitlines() if "intro.mp4" in line)
-    assert "NOT readable as text" in video
+    assert "NOT readable — unsupported format" in video
+    assert "words extracted" not in video
 
+    # A PPTX was never extracted here, so it must not be called readable yet.
     slides = next(line for line in report.splitlines() if "Lecture 3.pptx" in line)
-    assert "readable" in slides
+    assert "unread — extractable format" in slides
+    assert "words extracted" not in slides
 
 
-async def test_content_map_lists_captions_as_readable(course, mcp):
+async def test_content_map_lists_captions_and_transcripts(course, mcp):
     report = await call(mcp, "get_course_content_map", course_identifier=225)
 
     assert "## Captions and transcripts" in report
-    assert "readable (captions/transcript)" in report
+    assert "week3-lecture.vtt" in report
+    assert "words extracted" not in report, "nothing was read here, so nothing is readable"
 
 
 async def test_read_course_material_returns_an_index_not_the_whole_deck(course, downloads, mcp):

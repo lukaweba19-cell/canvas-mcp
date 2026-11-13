@@ -97,6 +97,11 @@ class Extracted:
         return len(self.text)
 
     @property
+    def status(self) -> ContentStatus:
+        """Whether this extraction produced text, and why not if it did not."""
+        return status_from_parts(self.filename, self.sections, self.warnings)
+
+    @property
     def unreadable(self) -> list[str]:
         """Labels of sections with no text: image-only or genuinely blank."""
         return [section.label for section in self.sections if not section.text.strip()]
@@ -142,6 +147,106 @@ def is_readable(filename: str) -> bool:
 def is_transcript(filename: str) -> bool:
     """Whether this file is a caption track / transcript rather than a document."""
     return Path(filename).suffix.lower() in _TRANSCRIPT_SUFFIXES
+
+
+# ---------------------------------------------------------------------------
+# Content status
+# ---------------------------------------------------------------------------
+
+_IMAGE_ONLY_WARNING = re.compile(
+    r"no text layer|image-only|image only|no extractable text|"
+    r"no readable text after OCR|scanned",
+    re.IGNORECASE,
+)
+_UNSUPPORTED_WARNING = re.compile(
+    r"not a readable text format|has no text representation", re.IGNORECASE
+)
+_FAILED_WARNING = re.compile(
+    r"corrupt|extraction failed|could not be read|not valid", re.IGNORECASE
+)
+
+
+@dataclass(frozen=True)
+class ContentStatus:
+    """Whether text can actually be produced, and if not, exactly why.
+
+    Every surface that would call something "readable" reports one of these
+    instead, so ``readable=True`` always means real text exists — never merely
+    that the file's extension is one this module can open.
+    """
+
+    readable: bool
+    reason: str  # text | image_only | empty | unsupported | failed | not_read
+    detail: str
+    words: int = 0
+
+    def label(self) -> str:
+        if self.readable:
+            return f"readable — {self.words} words extracted"
+        if self.reason == "not_read":
+            return "unread — extractable format: call read_course_material"
+        if self.reason == "image_only":
+            return f"NOT readable — image-only: {self.detail}"
+        if self.reason == "empty":
+            return "NOT readable — empty: the file contains no text"
+        if self.reason == "unsupported":
+            return f"NOT readable — unsupported format: {self.detail}"
+        return f"NOT readable — extraction failed: {self.detail}"
+
+
+def _ocr_hint() -> str:
+    if ocr.is_available():
+        return "OCR is installed but found no text"
+    return "install OCR with `uv sync --extra ocr`"
+
+
+def _unsupported_detail(filename: str) -> str:
+    suffix = Path(filename).suffix.lower().lstrip(".")
+    return (
+        f"'{suffix or 'no extension'}' has no text representation "
+        "(audio, video, image or archive)"
+    )
+
+
+def status_from_parts(
+    filename: str,
+    sections: list[Section],
+    warnings: list[str],
+) -> ContentStatus:
+    """Derive a content status from extracted sections and their warnings."""
+    words = sum(len(section.text.split()) for section in sections)
+    if words:
+        return ContentStatus(True, "text", "", words)
+
+    joined = " ".join(warnings)
+    if _UNSUPPORTED_WARNING.search(joined):
+        return ContentStatus(False, "unsupported", _unsupported_detail(filename))
+    if _FAILED_WARNING.search(joined):
+        return ContentStatus(False, "failed", warnings[0] if warnings else "unknown error")
+    if _IMAGE_ONLY_WARNING.search(joined):
+        return ContentStatus(
+            False,
+            "image_only",
+            "every page/slide is an image with no text layer; " + _ocr_hint(),
+        )
+    return ContentStatus(False, "empty", "the file contains no text")
+
+
+def status_for(filename: str, record: dict | None = None) -> ContentStatus:
+    """Status for a file, using its cached extraction when one exists."""
+    if record is not None:
+        sections = [
+            Section(str(item.get("label", "")), str(item.get("text", "")))
+            for item in record.get("sections") or []
+        ]
+        return status_from_parts(filename, sections, list(record.get("warnings") or []))
+
+    if not is_readable(filename):
+        return ContentStatus(False, "unsupported", _unsupported_detail(filename))
+    return ContentStatus(
+        False, "not_read", "extractable format; call read_course_material to read it"
+    )
+
 
 
 # ---------------------------------------------------------------------------

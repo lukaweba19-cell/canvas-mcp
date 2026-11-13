@@ -136,6 +136,41 @@ def materials_dir(course_identifier: str | int, course_code: str | None = None) 
     return path
 
 
+def material_cache_path(
+    course_identifier: str | int,
+    file_id: str | int,
+    filename: str,
+    course_code: str | None = None,
+) -> Path:
+    """Where one extracted file's cached text lives."""
+    return materials_dir(course_identifier, course_code) / f"{file_id}-{slug(filename, 50)}.json"
+
+
+def find_material_cache(
+    course_identifier: str | int,
+    file_id: str | int,
+    course_code: str | None = None,
+) -> Path | None:
+    directory = materials_dir(course_identifier, course_code)
+    matches = sorted(directory.glob(f"{file_id}-*.json"))
+    return matches[0] if matches else None
+
+
+def load_material_record(
+    course_identifier: str | int,
+    file_id: str | int,
+    course_code: str | None = None,
+) -> dict[str, Any] | None:
+    """The cached extraction for a file, or None when it was never read."""
+    path = find_material_cache(course_identifier, file_id, course_code)
+    if path is None:
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
 def study_dir(course_identifier: str | int, course_code: str | None = None) -> Path:
     path = course_dir(course_identifier, course_code) / "study"
     path.mkdir(parents=True, exist_ok=True)

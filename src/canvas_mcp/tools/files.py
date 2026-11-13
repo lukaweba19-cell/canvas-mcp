@@ -19,6 +19,7 @@ import tempfile
 from fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 
+from ..core import extract, student_store
 from ..core.cache import get_course_code, get_course_id
 from ..core.client import (
     canvas_authenticated_client,
@@ -303,7 +304,14 @@ def register_shared_file_tools(mcp: FastMCP) -> None:
             name = f.get("display_name") or f.get("filename", "unknown")
             size = format_file_size(f.get("size", 0))
             ctype = f.get("content-type", "unknown")
-            result += f"  ID: {fid} | {fence_untrusted_inline(name, 'file name')} ({size}, {ctype})\n"
+            status = extract.status_for(
+                name,
+                student_store.load_material_record(course_id, fid, course_display),
+            )
+            result += (
+                f"  ID: {fid} | {fence_untrusted_inline(name, 'file name')} "
+                f"({size}, {ctype}) — {status.label()}\n"
+            )
 
         result += f"\nTotal: {len(files)} file(s)"
         return result

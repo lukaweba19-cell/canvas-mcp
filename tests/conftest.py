@@ -79,6 +79,7 @@ _CANVAS_MODULES = (
     "canvas_mcp.tools.student_insight",
     "canvas_mcp.tools.workspace",
     "canvas_mcp.tools.rubrics",
+    "canvas_mcp.tools.files",
 )
 
 
