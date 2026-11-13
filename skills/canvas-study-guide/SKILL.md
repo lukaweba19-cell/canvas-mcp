@@ -61,6 +61,10 @@ Rules that make the guide useful:
 If a section has no source behind it, delete it. A short honest guide beats a
 long one with invented content.
 
+For a graded task rather than an exam, read `get_my_assignment_rubric` first and
+pass `assignment_id` to `build_study_guide`. The report then names any rubric
+criterion the guide never addresses.
+
 ### 5. Practice test
 
 `make_practice_test(course_identifier, title, markdown=..., num_questions=20)`.
@@ -87,6 +91,7 @@ material was unreadable.
 | Tool | Purpose |
 |------|---------|
 | `get_course_content_map` | What exists and is readable |
+| `get_my_assignment_rubric` | Criteria the marks come from |
 | `read_course_material` | Extract a file, get its index |
 | `read_material_section` | Read one slide/page |
 | `read_page_text` | Course page as plain text |

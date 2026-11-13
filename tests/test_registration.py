@@ -34,6 +34,9 @@ NEW_TOOLS = {
     "get_my_handoff",
     "save_voice_sample",
     "check_draft_style",
+    # rubrics
+    "get_my_assignment_rubric",
+    "check_work_against_rubric",
     # deeper student reads
     "get_my_assignment_brief",
     "get_my_grade_breakdown",
@@ -59,6 +62,11 @@ CAPABILITIES = {
         "get_my_handoff",
     },
     "sound human when writing": {"save_voice_sample", "check_draft_style"},
+    "write to the rubric": {
+        "get_my_assignment_rubric",
+        "check_work_against_rubric",
+        "build_study_guide",
+    },
     "submit assignments": {"submit_assignment", "get_my_submission"},
     "grades, deadlines, feedback": {
         "get_my_assignment_brief",
@@ -109,7 +117,7 @@ async def test_no_educator_tools_are_exposed(mcp):
 
 async def test_tool_count_is_pinned(mcp):
     names = await _registered(mcp)
-    assert len(names) == 67, sorted(names)
+    assert len(names) == 69, sorted(names)
 
 
 async def test_new_tool_schemas_are_usable(mcp):

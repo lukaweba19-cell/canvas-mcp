@@ -35,6 +35,13 @@ class FakeCanvas:
         self._routes: list[tuple[str, str, Any]] = []
 
     def route(self, method: str, prefix: str, payload: Any) -> FakeCanvas:
+        # Later registrations replace earlier ones for the same endpoint, so a
+        # test can override a route its fixture already set up.
+        self._routes = [
+            existing
+            for existing in self._routes
+            if not (existing[0] == method.upper() and existing[1] == prefix)
+        ]
         self._routes.append((method.upper(), prefix, payload))
         return self
 
@@ -71,6 +78,7 @@ _CANVAS_MODULES = (
     "canvas_mcp.tools.student_write",
     "canvas_mcp.tools.student_insight",
     "canvas_mcp.tools.workspace",
+    "canvas_mcp.tools.rubrics",
 )
 
 

@@ -201,3 +201,29 @@ async def test_read_page_text_returns_prose_and_caches_it(course, mcp):
     assert "Expected O(1) lookup." in result
     assert "Cached:" in result
     assert "x()" not in result, "script contents must not read as prose"
+
+
+async def test_unmatched_transcript_lists_the_candidates(course, mcp):
+    """A transcript that does not match by name must still be offered, not dropped."""
+    course.route("get", "/courses/225/modules", [
+        {
+            "id": 2,
+            "name": "Week 4",
+            "items": [
+                {
+                    "id": 21,
+                    "type": "ExternalTool",
+                    "title": "Guest speaker session",
+                    "external_url": "https://panopto.example/guest",
+                }
+            ],
+        }
+    ])
+
+    report = await call(mcp, "get_course_content_map", course_identifier=225)
+
+    item = next(line for line in report.splitlines() if "Guest speaker" in line)
+    assert "NOT readable" in item
+    assert "no transcript matched its title" in item
+    assert "file_id=901" in item, "the real transcript must be named as a candidate"
+    assert "week3-lecture.vtt" in item

@@ -13,26 +13,12 @@ from fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 
 from ..core import extract, student_store
+from ..core import rubric as rubric_core
 from ..core import study as study_core
 from ..core.cache import get_course_code, get_course_id
 from ..core.client import make_canvas_request
 from ..core.dates import format_date
-from ..core.untrusted_content import fence_untrusted_inline
 from ..core.validation import coerce_canvas_id, validate_params
-
-
-def _rubric_lines(rubric: dict) -> list[str]:
-    lines = []
-    for criterion in rubric.get("criteria") or []:
-        description = criterion.get("description", "Criterion")
-        points = criterion.get("points", "?")
-        lines.append(f"- {fence_untrusted_inline(description, 'rubric criterion')} ({points} pts)")
-        for rating in criterion.get("ratings") or []:
-            lines.append(
-                f"    - {rating.get('points', '?')} pts: "
-                f"{fence_untrusted_inline(rating.get('description', ''), 'rubric rating')}"
-            )
-    return lines
 
 
 def register_workspace_tools(mcp: FastMCP) -> None:
@@ -106,20 +92,26 @@ def register_workspace_tools(mcp: FastMCP) -> None:
             brief += ["", "⚠️ Group assignment — agent submission is refused by design."]
         student_store.write_text(workspace / "brief.md", "\n".join(brief))
 
-        rubric = assignment.get("rubric") or {}
-        rubric_path = workspace / "rubric.md"
-        rubric_lines = _rubric_lines(rubric) if rubric else []
-        if rubric_lines:
-            student_store.write_text(
-                rubric_path,
-                f"# Rubric — {title}\n\n" + "\n".join(rubric_lines) + "\n",
+        parsed_rubric = rubric_core.from_assignment(assignment)
+        if parsed_rubric.criteria:
+            rubric_path = rubric_core.save(parsed_rubric, course_id, assignment_id, title)
+            rubric_summary = (
+                f"Rubric written: {rubric_path} ({parsed_rubric.source}, "
+                f"{len(parsed_rubric.criteria)} criteria, "
+                f"{parsed_rubric.total_points:g} pts)"
+            )
+        else:
+            rubric_summary = (
+                "No rubric: Canvas has none attached and none could be parsed from the "
+                "prompt — ask the instructor what is being marked, and write to the "
+                "assignment instructions."
             )
 
         return "\n".join(
             [
                 f"Workspace: {workspace}",
                 f"Brief written: {workspace / 'brief.md'}",
-                f"Rubric written: {rubric_path}" if rubric_lines else "No rubric on this assignment.",
+                rubric_summary,
                 "",
                 "Files in the prompt (read with read_course_material if the prompt "
                 "references them):",
@@ -157,10 +149,27 @@ def register_workspace_tools(mcp: FastMCP) -> None:
         result = student_store.save_draft(
             course_identifier, assignment_id, content, title=title, kind=kind, notes=notes
         )
+        coverage = ""
+        parsed_rubric = rubric_core.load(course_identifier, assignment_id)
+        if parsed_rubric is not None and parsed_rubric.criteria:
+            verdicts = rubric_core.check(parsed_rubric, content)
+            addressed = sum(1 for verdict in verdicts if verdict.verdict == "addressed")
+            missing = [
+                verdict.criterion.plain()
+                for verdict in verdicts
+                if verdict.verdict == "not found"
+            ]
+            coverage = (
+                f"\nRubric ({parsed_rubric.source}): {addressed}/{len(verdicts)} "
+                "criteria referenced"
+                + (f"; not found: {', '.join(missing[:5])}" if missing else "")
+                + "\nFull verdict: check_work_against_rubric"
+            )
         return (
             f"Draft v{result['version']} saved ({kind}): {result['path']}\n"
             f"Current copy: {result['current']}\n"
             f"Words: {study_core.word_count(content)}"
+            f"{coverage}"
         )
 
     @mcp.tool(annotations=ToolAnnotations(read_only_hint=True))

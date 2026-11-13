@@ -5,11 +5,14 @@ import csv
 import json
 import math
 from io import StringIO
+from pathlib import Path
 from typing import Any
 
 from fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 
+from ..core import rubric as rubric_core
+from ..core import student_store
 from ..core.cache import get_course_code, get_course_id
 from ..core.client import make_canvas_request
 from ..core.dates import format_date, truncate_text
@@ -17,7 +20,7 @@ from ..core.untrusted_content import (
     fence_untrusted,
     fence_untrusted_inline,
 )
-from ..core.validation import validate_params
+from ..core.validation import coerce_canvas_id, validate_params
 from ..core.write_confirmation import (
     ConfirmationGuard,
     unconfirmed_write_warning,
@@ -1187,3 +1190,147 @@ def register_rubric_tools(mcp: FastMCP) -> None:
 
         return result
 
+def register_student_rubric_tools(mcp: FastMCP) -> None:
+    """Rubric tools that read the student's own work against the marking criteria."""
+
+    @mcp.tool(annotations=ToolAnnotations(read_only_hint=True))
+    @validate_params
+    async def get_my_assignment_rubric(
+        course_identifier: str | int,
+        assignment_id: str | int,
+    ) -> str:
+        """Get the marking rubric for an assignment, from Canvas or its prompt.
+
+        Reads Canvas's attached rubric (criteria, point values and every rating
+        level), and if there is none, parses a rubric pasted into the assignment
+        description (table or bulleted list with points). The result is saved in
+        the assignment workspace so later sessions can use it.
+
+        When neither source has one, says so plainly — it never returns an empty
+        rubric as if the assignment were unmarked.
+
+        Args:
+            course_identifier: Course code or Canvas ID
+            assignment_id: Canvas assignment ID
+        """
+        validated = coerce_canvas_id(assignment_id)
+        if validated is None:
+            return "Error: assignment_id must be a numeric Canvas assignment ID."
+        course_id = await get_course_id(course_identifier)
+
+        assignment = await make_canvas_request(
+            "get", f"/courses/{course_id}/assignments/{validated}",
+            params={"include[]": ["rubric"]},
+        )
+        if isinstance(assignment, dict) and "error" in assignment:
+            return f"Error fetching assignment: {assignment['error']}"
+
+        title = assignment.get("name", f"Assignment {validated}")
+        parsed = rubric_core.from_assignment(assignment)
+        if parsed.is_empty:
+            checked = len(assignment.get("description") or "")
+            return (
+                f"No rubric found for {fence_untrusted_inline(title, 'assignment name')} "
+                f"(id {validated}). Canvas has no rubric attached and none could be "
+                f"parsed from the {checked} characters of assignment description.\n"
+                "Nothing was invented: ask the instructor what the marks are for, or "
+                "check the syllabus and any 'assignment details' page. "
+                "get_my_assignment_brief still shows the prompt and submission rules."
+            )
+
+        path = rubric_core.save(parsed, course_id, validated, title)
+        body = parsed.render_markdown(title, fence=True)
+        return (
+            f"{body}\nSaved: {path}\n"
+            f"Next: build_study_guide(assignment_id={validated}) references these "
+            f"criteria, save_assignment_draft reports coverage, and "
+            f"check_work_against_rubric({validated}) gives a per-criterion verdict."
+        )
+
+    @mcp.tool(annotations=ToolAnnotations(read_only_hint=True))
+    @validate_params
+    async def check_work_against_rubric(
+        course_identifier: str | int,
+        assignment_id: str | int,
+        source: str = "draft",
+        text: str = "",
+        path: str = "",
+    ) -> str:
+        """Check a draft or submission against the rubric, criterion by criterion.
+
+        Reports which criteria the text never engages and the words it looked
+        for — a checklist, not a grade.
+
+        Args:
+            course_identifier: Course code or Canvas ID
+            assignment_id: Canvas assignment ID
+            source: "draft" (saved draft), "submission" (what Canvas has), or "text"
+            text: Text to check when source="text"
+            path: Path to a markdown/text file to check instead
+        """
+        validated = coerce_canvas_id(assignment_id)
+        if validated is None:
+            return "Error: assignment_id must be a numeric Canvas assignment ID."
+        course_id = await get_course_id(course_identifier)
+
+        rubric = rubric_core.load(course_id, validated)
+        if rubric is None or rubric.is_empty:
+            assignment = await make_canvas_request(
+                "get", f"/courses/{course_id}/assignments/{validated}",
+                params={"include[]": ["rubric"]},
+            )
+            if isinstance(assignment, dict) and "error" in assignment:
+                return f"Error fetching assignment: {assignment['error']}"
+            rubric = rubric_core.from_assignment(assignment)
+            if rubric.is_empty:
+                return (
+                    f"No rubric found for assignment {validated}, so there is nothing to "
+                    "check against. Run get_my_assignment_rubric for the full explanation, "
+                    "or ask the instructor what the marks are for."
+                )
+            rubric_core.save(
+                rubric, course_id, validated, assignment.get("name")
+            )
+
+        content = ""
+        subject = f"assignment {validated}"
+        if path:
+            target = Path(path).expanduser()
+            if not target.is_file():
+                return f"No file at {path}."
+            content = target.read_text(encoding="utf-8", errors="replace")
+            subject = f"{target.name} ({rubric.source} rubric)"
+        elif source == "text":
+            content = text
+            subject = f"supplied text ({rubric.source} rubric)"
+        elif source == "submission":
+            submission = await make_canvas_request(
+                "get",
+                f"/courses/{course_id}/assignments/{validated}/submissions/self",
+            )
+            if not isinstance(submission, dict) or "error" in submission:
+                detail = submission.get("error") if isinstance(submission, dict) else submission
+                return f"Error reading your submission: {detail}"
+            content = str(submission.get("body") or "")
+            subject = f"your submission ({rubric.source} rubric)"
+            if not content.strip():
+                return (
+                    "Your submission has no text body to check (it may be a file upload). "
+                    "Pass the file's text with source=\"text\" or path=..., or check the "
+                    "saved draft instead."
+                )
+        else:
+            draft = student_store.read_draft(course_id, validated)
+            if draft is None:
+                return (
+                    f"No saved draft for assignment {validated}. Save one with "
+                    "save_assignment_draft, or pass text=/path= to check other writing."
+                )
+            content = draft["content"]
+            subject = f"your draft ({rubric.source} rubric)"
+
+        if not content.strip():
+            return "There is no text to check."
+        return rubric_core.render_check(
+            rubric, rubric_core.check(rubric, content), subject
+        )

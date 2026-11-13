@@ -12,6 +12,7 @@ from fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 
 from ..core import extract
+from ..core import rubric as rubric_core
 from ..core.cache import get_course_code, get_course_id
 from ..core.client import fetch_all_paginated_results, make_canvas_request
 from ..core.dates import format_date, parse_date
@@ -84,15 +85,35 @@ def register_student_insight_tools(mcp: FastMCP) -> None:
 
         lines.append("\nPrompt:\n" + fence_untrusted(_html(assignment.get("description")) or "(none)", "assignment prompt"))
 
-        rubric = assignment.get("rubric") or {}
-        criteria = rubric.get("criteria") or []
-        if criteria:
-            lines.append("\nRubric:")
-            for criterion in criteria:
-                lines.append(
-                    f"- {fence_untrusted_inline(criterion.get('description', 'Criterion'), 'rubric criterion')} "
-                    f"({criterion.get('points', '?')} pts)"
+        parsed = rubric_core.from_assignment(assignment)
+        if parsed.criteria:
+            rubric_core.save(parsed, course_id, assignment_id, assignment.get("name"))
+            lines.append(
+                f"\nRubric ({parsed.source}, {len(parsed.criteria)} criteria, "
+                f"{parsed.total_points:g} points) — also saved to the assignment workspace:"
+            )
+            for criterion in parsed.criteria:
+                points = (
+                    f" — {criterion.points:g} pts"
+                    if criterion.points is not None
+                    else ""
                 )
+                lines.append(
+                    f"- {fence_untrusted_inline(criterion.plain(), 'rubric criterion')}{points}"
+                )
+                for rating in criterion.ratings:
+                    level = (
+                        f"{rating.points:g} pts: " if rating.points is not None else ""
+                    )
+                    lines.append(
+                        f"    - {level}"
+                        f"{fence_untrusted_inline(rating.description, 'rubric rating')}"
+                    )
+        else:
+            lines.append(
+                "\nNo rubric: Canvas has none attached and none could be parsed from the "
+                "prompt. Ask the instructor what the marks are for, or check the syllabus."
+            )
 
         comments = submission.get("submission_comments") or []
         if comments:

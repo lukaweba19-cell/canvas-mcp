@@ -129,15 +129,38 @@ def _item_guidance(
         )
     if item_type in ("ExternalTool", "ExternalUrl"):
         transcript = _matching_transcript(title, transcripts)
+        url = item.get("external_url") or item.get("url")
         if transcript is not None:
             return (
                 "embedded video/LTI — the item itself is NOT readable, but a "
                 f"transcript exists: read_course_material(file_id={transcript.get('id')}) "
                 f"for {_file_name(transcript)}"
             )
-        url = item.get("external_url") or item.get("url")
+        if item_type == "ExternalTool" and transcripts:
+            # No name match, but the course has transcripts: name them, so a
+            # differently-titled recording is still reachable.
+            listed = "; ".join(
+                f"file_id={entry.get('id')} ({_file_name(entry)})"
+                for entry in transcripts[:6]
+            )
+            return (
+                "embedded video/LTI — the item itself is NOT readable as text, and no "
+                "transcript matched its title. Transcripts in this course: "
+                f"{listed}. Pass one to read_course_material to read what was said."
+                + (f" To watch it: {url}" if url else "")
+            )
+        if transcripts:
+            return (
+                "external link — NOT readable as text; open "
+                + (str(url) if url else "it in Canvas")
+                + ". The course also has transcripts: "
+                + "; ".join(
+                    f"file_id={entry.get('id')} ({_file_name(entry)})"
+                    for entry in transcripts[:4]
+                )
+            )
         return (
-            "embedded video/LTI — NOT readable as text and no transcript in course "
+            "embedded video/LTI - NOT readable as text and no transcript in course "
             "files; open "
             + (str(url) if url else "it in Canvas")
             + " and read the slides or notes posted alongside it"

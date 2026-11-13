@@ -12,10 +12,11 @@ from pathlib import Path
 from fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 
+from ..core import rubric as rubric_core
 from ..core import student_store
 from ..core import study as study_core
 from ..core.cache import get_course_code, get_course_id
-from ..core.validation import validate_params
+from ..core.validation import coerce_canvas_id, validate_params
 
 _PREVIEW_CHARS = 1200
 
@@ -59,6 +60,7 @@ def register_study_tools(mcp: FastMCP) -> None:
         exam_date: str = "",
         max_pages: float = 3.0,
         overwrite: bool = False,
+        assignment_id: str | int | None = None,
     ) -> str:
         """Save a study guide as .md in the student workspace.
 
@@ -86,6 +88,7 @@ def register_study_tools(mcp: FastMCP) -> None:
             exam_date: ISO date if known
             max_pages: Page budget (default 3; ~450 words per page)
             overwrite: Replace an existing guide with the same title
+            assignment_id: Check the guide against this assignment's rubric
         """
         course_id = await get_course_id(course_identifier)
         course_code = await get_course_code(course_id) or str(course_identifier)
@@ -138,6 +141,34 @@ def register_study_tools(mcp: FastMCP) -> None:
                 "⚠️  No source markers found. Add [deck/slide/page] references so every "
                 "claim can be checked against the material."
             )
+        if assignment_id is not None:
+            validated = coerce_canvas_id(assignment_id)
+            parsed_rubric = (
+                rubric_core.load(course_id, validated) if validated else None
+            )
+            if parsed_rubric is None or not parsed_rubric.criteria:
+                report.append(
+                    f"No rubric on file for assignment {assignment_id}, so this guide was "
+                    "not checked against one. Run get_my_assignment_rubric first if that "
+                    "assignment has criteria."
+                )
+            else:
+                verdicts = rubric_core.check(parsed_rubric, markdown)
+                addressed = sum(
+                    1 for verdict in verdicts if verdict.verdict == "addressed"
+                )
+                report.append(
+                    f"Rubric ({parsed_rubric.source}): {addressed}/{len(verdicts)} "
+                    "criteria referenced by the guide."
+                )
+                uncovered = [
+                    verdict.criterion.plain()
+                    for verdict in verdicts
+                    if verdict.verdict != "addressed"
+                ]
+                if uncovered:
+                    report.append("Criteria not covered: " + ", ".join(uncovered[:8]))
+
         report.append(f"\nPreview:\n{markdown.strip()[:_PREVIEW_CHARS]}")
         return "\n".join(report)
 

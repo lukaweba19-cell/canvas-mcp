@@ -45,6 +45,7 @@ from .tools import (
     register_shared_messaging_tools,
     register_shared_module_tools,
     register_student_insight_tools,
+    register_student_rubric_tools,
     register_student_tools,
     register_student_write_tools,
     register_study_tools,
@@ -161,6 +162,7 @@ def register_all_tools(mcp: FastMCP) -> None:
     register_shared_file_tools(mcp)
     register_shared_messaging_tools(mcp)
     register_rubric_tools(mcp)
+    register_student_rubric_tools(mcp)
     register_discovery_tools(mcp)
     register_self_identity_tools(mcp)
 
