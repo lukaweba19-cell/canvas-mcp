@@ -18,8 +18,8 @@ from mcp.types import ToolAnnotations
 from ..core import extract, ocr, student_store
 from ..core.cache import get_course_code, get_course_id
 from ..core.client import (
-    canvas_authenticated_client,
     fetch_all_paginated_results,
+    iter_canvas_file_bytes,
     make_canvas_request,
 )
 from ..core.untrusted_content import fence_untrusted, fence_untrusted_inline
@@ -171,11 +171,10 @@ async def _download_course_file_bytes(download_url: str) -> tuple[bytes | None, 
     """Fetch a Canvas file's bytes using the caller's own credentials."""
     try:
         buffer = bytearray()
-        async with canvas_authenticated_client() as client:
-            async with client.stream("GET", download_url, follow_redirects=True) as response:
-                response.raise_for_status()
-                async for chunk in response.aiter_bytes(chunk_size=65536):
-                    buffer.extend(chunk)
+        # The token stays on Canvas's origin; the storage redirect is followed
+        # without it (see iter_canvas_file_bytes).
+        async for chunk in iter_canvas_file_bytes(download_url):
+            buffer.extend(chunk)
         return bytes(buffer), None
     except Exception as exc:  # network, auth, storage redirect
         return None, f"{type(exc).__name__}: {exc}"
@@ -396,9 +395,10 @@ def register_material_tools(mcp: FastMCP) -> None:
         """Extract the text of a course file (PDF, slides, Word, Excel, notebook).
 
         Scanned PDFs and screenshot decks are OCR'd with the built-in engine.
-        Legacy Word/PowerPoint/Excel binaries (.doc/.ppt/.xls) cannot be parsed
-        without a converter, and come back as an explicit refusal with the
-        conversion step instead of an empty result.
+        Legacy Word and Excel binaries (.doc/.xls) are read in process. Legacy
+        PowerPoint (.ppt) is converted with a local LibreOffice; when that is not
+        installed the call says so and names the install step instead of
+        returning an empty result.
 
         Downloads the file once, extracts text, caches it in the student
         workspace, and by default returns a section index plus the cache path —
@@ -611,7 +611,10 @@ def _status_note(status: extract.ContentStatus) -> str:
             "UTF-8/UTF-16/Windows-1252 text. Ask for a PDF or plain-text copy."
         )
     if status.reason == "legacy_office":
-        return "This is a legacy Office binary file, not text. To read it, " + status.detail + "."
+        return (
+            "This legacy Office file needs one step before it can be read: "
+            + status.detail + "."
+        )
     if status.reason == "too_large":
         return (
             "This file is too large to extract in one call: " + status.detail +

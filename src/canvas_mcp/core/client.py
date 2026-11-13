@@ -634,6 +634,71 @@ async def make_canvas_request(
             await client.aclose()
 
 
+def _url_origin(url: str) -> tuple[str, str, int] | None:
+    """``(scheme, host, port)`` for a URL, or None when it is not absolute."""
+    try:
+        parsed = httpx.URL(url)
+    except Exception:
+        return None
+    if not parsed.scheme or not parsed.host:
+        return None
+    scheme = parsed.scheme.lower()
+    port = parsed.port or (443 if scheme == "https" else 80)
+    return scheme, parsed.host.lower(), port
+
+
+def canvas_origin() -> tuple[str, str, int] | None:
+    """The configured Canvas API's origin: scheme, host and port."""
+    from .config import get_config
+
+    return _url_origin(get_config().canvas_api_url)
+
+
+def is_canvas_origin(url: str) -> bool:
+    """Whether a URL points at this Canvas instance and nothing else."""
+    origin = _url_origin(url)
+    return origin is not None and origin == canvas_origin()
+
+
+async def iter_canvas_file_bytes(
+    url: str, max_redirects: int = 5
+) -> AsyncIterator[bytes]:
+    """Yield a Canvas file's bytes, keeping the token on Canvas's own origin.
+
+    Canvas file URLs answer with a redirect to inst-fs/S3 whose target carries
+    its own signature. Sending the Canvas bearer token there both leaks the
+    token and breaks the request (S3 rejects dual auth), so the token goes only
+    to the configured Canvas origin — including across redirect hops. Once the
+    download leaves Canvas it continues unauthenticated, as the signature
+    expects.
+    """
+    from .config import get_config
+
+    timeout = get_config().api_timeout
+    target = url
+    for _ in range(max_redirects + 1):
+        client_cm = (
+            canvas_authenticated_client()
+            if is_canvas_origin(target)
+            else httpx.AsyncClient(timeout=timeout)
+        )
+        async with client_cm as client:
+            async with client.stream("GET", target, follow_redirects=False) as response:
+                if response.is_redirect:
+                    location = response.headers.get("location")
+                    if not location:
+                        raise RuntimeError(
+                            "Canvas file download redirected without a Location header"
+                        )
+                    target = str(response.url.join(location))
+                    continue
+                response.raise_for_status()
+                async for chunk in response.aiter_bytes(chunk_size=65536):
+                    yield chunk
+                return
+    raise RuntimeError("Canvas file download redirected too many times")
+
+
 async def upload_file_to_storage(
     upload_url: str,
     upload_params: dict[str, Any],
@@ -706,21 +771,30 @@ async def upload_file_to_storage(
             elif response.status_code in (301, 302, 303):
                 # Redirect - follow it to get file info from Canvas
                 redirect_url = response.headers.get('Location')
-                if redirect_url:
-                    # Follow the redirect to get file info. This goes back to the
-                    # Canvas API and needs auth; route through the shared
-                    # fail-closed resolver so HTTP mode never uses the server's
-                    # own token.
-                    try:
-                        async with canvas_authenticated_client() as canvas_client:
-                            confirm_response = await canvas_client.get(redirect_url)
-                            confirm_response.raise_for_status()
-                            confirmed: dict[str, Any] = confirm_response.json()
-                            return confirmed
-                    except PermissionError as e:
-                        return {"error": str(e)}
-                else:
+                if not redirect_url:
                     return {"error": "Redirect without Location header"}
+
+                # The Location comes from the storage host, not from Canvas, and
+                # the confirmation GET carries the student's Canvas token. Only
+                # send it back to Canvas itself; anything else is refused before
+                # a request is made.
+                absolute = str(response.url.join(redirect_url))
+                if not is_canvas_origin(absolute):
+                    return {
+                        "error": (
+                            "Refused to confirm this upload: the storage host "
+                            "redirected to a different origin, and the Canvas token "
+                            "is only sent to Canvas. Nothing was confirmed."
+                        )
+                    }
+                try:
+                    async with canvas_authenticated_client() as canvas_client:
+                        confirm_response = await canvas_client.get(absolute)
+                        confirm_response.raise_for_status()
+                        confirmed: dict[str, Any] = confirm_response.json()
+                        return confirmed
+                except PermissionError as e:
+                    return {"error": str(e)}
 
             else:
                 # Unexpected status

@@ -6,6 +6,9 @@ are usually the professor's own explanation of what matters) once, and caches
 the result so repeat reads cost nothing.
 
 Formats:
+- DOC               -> the document, via legacy-doc's piece-table parser
+- XLS               -> one section per sheet, via xlrd
+- PPT               -> converted to PPTX with a local LibreOffice, then read
 - PDF               -> one section per page, via pypdf. A PDF is read as slides
                        (Slide 1, Slide 2, ...) only when every page repeats one
                        landscape, slide-sized page box (4:3 to 16:9) and the text
@@ -38,9 +41,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from xml.etree import ElementTree
 
+import xlrd
 from pypdf import PdfReader
 
-from . import ocr
+from . import convert, ocr
+
+try:  # a hard dependency; a broken install must degrade to a clear message
+    from legacy_doc import extract_text as _legacy_doc_text
+except Exception:  # pragma: no cover - only if the install is damaged
+    _legacy_doc_text = None
 
 # OOXML namespaces
 _A = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
@@ -67,6 +76,8 @@ _SLIDE_MAX_WORDS = 250
 
 _READABLE_SUFFIXES = {
     ".pdf", ".pptx", ".pptm", ".docx", ".xlsx", ".xlsm", ".ipynb",
+    # Legacy Office formats the readers below handle directly or via LibreOffice.
+    ".doc", ".xls", ".ppt",
     ".html", ".htm", ".txt", ".md", ".markdown", ".csv", ".json",
     ".py", ".js", ".ts", ".java", ".c", ".cpp", ".rb", ".go", ".rs",
     # Ruby/Rails course files: views, Rake tasks, gemspecs and rackups are source.
@@ -76,10 +87,11 @@ _READABLE_SUFFIXES = {
     ".vtt", ".srt", ".webvtt",
 }
 
-# Legacy Office binaries (Word 97-2003 and friends) are OLE compound files, not
-# text; parsing them properly needs a converter. A .doc that is really a .docx
-# (a common mislabel) is read as its real format, and a true legacy binary gets
-# an explicit conversion instruction instead of a vague "unsupported format".
+# Legacy Office binaries (Word 97-2003 and friends) are OLE compound files.
+# .doc and .xls are read in process (legacy-doc, xlrd); .ppt is converted to
+# .pptx with a local LibreOffice, and says so plainly when it is not installed.
+# A legacy file that is really a modern one (a common mislabel) is read as its
+# real format.
 _LEGACY_OFFICE = {
     ".doc": (".docx", "Word 97-2003"),
     ".ppt": (".pptx", "PowerPoint 97-2003"),
@@ -88,8 +100,8 @@ _LEGACY_OFFICE = {
 _ZIP_MAGIC = b"PK\x03\x04"
 _OLE_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
 _LEGACY_CONVERSION = (
-    "open it in Word, Google Docs or LibreOffice and save it as .docx (or PDF), "
-    "then read that file"
+    "open it in Word, Google Docs or LibreOffice and save it as a modern .docx "
+    "(or PDF), then read that file"
 )
 
 _TRANSCRIPT_SUFFIXES = {".vtt", ".srt", ".webvtt"}
@@ -211,7 +223,11 @@ _LEGACY_WARNING = re.compile(
 )
 _TOO_LARGE_WARNING = re.compile(r"over the \d+ MB extraction limit", re.IGNORECASE)
 _FAILED_WARNING = re.compile(
-    r"corrupt|extraction failed|could not be read|not (a )?valid", re.IGNORECASE
+    r"corrupt|extraction failed|could not be read|could not be parsed|not (a )?valid",
+    re.IGNORECASE,
+)
+_CONVERSION_WARNING = re.compile(
+    r"needs LibreOffice|Converting (this )?\.ppt", re.IGNORECASE
 )
 _BINARY_HINT = (
     "File is binary or in an unsupported text encoding (tried UTF-8, UTF-16 and "
@@ -293,6 +309,13 @@ def status_from_parts(
             f"it is over the {MAX_EXTRACT_BYTES // (1024 * 1024)} MB extraction limit",
             kind="file too large",
         )
+    if _CONVERSION_WARNING.search(joined):
+        return ContentStatus(
+            False,
+            "legacy_office",
+            f"converting it needs LibreOffice: {convert.INSTALL_HINT}",
+            kind="legacy .ppt",
+        )
     if _LEGACY_WARNING.search(joined):
         suffix = Path(filename).suffix.lower()
         return ContentStatus(
@@ -326,9 +349,13 @@ def status_for(filename: str, record: dict | None = None) -> ContentStatus:
         return status_from_parts(filename, sections, list(record.get("warnings") or []))
 
     suffix = Path(filename).suffix.lower()
-    if suffix in _LEGACY_OFFICE:
+    if suffix == ".ppt" and convert.converter_path() is None:
+        # Be honest before the download: this one needs LibreOffice installed.
         return ContentStatus(
-            False, "legacy_office", _LEGACY_CONVERSION, kind=f"legacy {suffix}"
+            False,
+            "legacy_office",
+            f"converting it needs LibreOffice: {convert.INSTALL_HINT}",
+            kind="legacy .ppt",
         )
     if not is_readable(filename):
         return ContentStatus(False, "unsupported", _unsupported_detail(filename))
@@ -567,6 +594,59 @@ def _extract_xlsx(data: bytes) -> tuple[list[Section], list[str]]:
     return sections, []
 
 
+def _extract_xls(data: bytes) -> tuple[list[Section], list[str]]:
+    """Excel 97-2003 sheets, read natively by xlrd (no converter involved)."""
+    try:
+        workbook = xlrd.open_workbook(file_contents=data, on_demand=True)
+    except Exception as exc:
+        return [], [
+            f"Legacy Excel workbook could not be parsed ({type(exc).__name__}: {exc}). "
+            f"To read it, {_LEGACY_CONVERSION}."
+        ]
+    sections: list[Section] = []
+    for index in range(workbook.nsheets):
+        sheet = workbook.sheet_by_index(index)
+        rows: list[str] = []
+        for row_index in range(sheet.nrows):
+            values = [str(value).strip() for value in sheet.row_values(row_index)]
+            values = [value for value in values if value]
+            if values:
+                rows.append(" | ".join(values))
+        sections.append(Section(f"Sheet {index + 1}", "\n".join(rows)))
+    return sections, []
+
+
+def _extract_doc(data: bytes) -> tuple[list[Section], list[str]]:
+    """Word 97-2003 text, via legacy-doc's piece-table parser (no converter)."""
+    if _legacy_doc_text is None:  # pragma: no cover - dependency is required
+        return [], [
+            f"Reading legacy .doc needs the legacy-doc package. To read it, "
+            f"{_LEGACY_CONVERSION}."
+        ]
+    try:
+        text = _legacy_doc_text(data).text
+    except Exception as exc:
+        return [], [
+            f"Legacy Word document could not be parsed ({type(exc).__name__}). "
+            f"To read it, {_LEGACY_CONVERSION}."
+        ]
+    cleaned = text.strip()
+    if not cleaned:
+        return [], ["Legacy Word document contains no readable text."]
+    return [Section("Document", cleaned)], []
+
+
+def _extract_ppt(data: bytes) -> tuple[list[Section], list[str]]:
+    """PowerPoint 97-2003 decks: LibreOffice converts them to PPTX first."""
+    converted, error = convert.convert_legacy_binary(data, ".ppt", ".pptx")
+    if error or converted is None:
+        return [], [
+            error
+            or f"Converting this .ppt needs LibreOffice: {convert.INSTALL_HINT}."
+        ]
+    return _extract_pptx(converted)
+
+
 def _extract_ipynb(data: bytes) -> tuple[list[Section], list[str]]:
     try:
         notebook = json.loads(data.decode("utf-8", errors="replace"))
@@ -789,35 +869,35 @@ def extract_bytes(filename: str, data: bytes) -> Extracted:
     suffix = Path(name).suffix.lower()
     kind = suffix.lstrip(".") or "unknown"
 
-    if suffix in _LEGACY_OFFICE:
-        modern_suffix, family = _LEGACY_OFFICE[suffix]
-        if data.startswith(_ZIP_MAGIC):
-            # Mislabeled modern file: read it as what it really is.
-            return extract_bytes(Path(name).with_suffix(modern_suffix).name, data)
-        if data.startswith(_OLE_MAGIC):
-            return Extracted(
-                name,
-                kind,
-                warnings=[
-                    f"'{suffix}' is a legacy {family} binary document, not text. "
-                    f"To read it, {_LEGACY_CONVERSION}."
-                ],
-            )
-        return Extracted(
-            name,
-            kind,
-            warnings=[
-                f"'{suffix}' is not a valid {family} document (neither a modern "
-                "Office file nor a legacy OLE binary)."
-            ],
-        )
-
+    # The size guard comes first: legacy parsing and conversion buffer the file
+    # too, so an oversized .doc must be refused before any of it is decoded.
     if len(data) > MAX_EXTRACT_BYTES:
         return Extracted(
             name, kind,
             warnings=[
                 f"File is {len(data) / (1024 * 1024):.1f} MB, over the "
                 f"{MAX_EXTRACT_BYTES // (1024 * 1024)} MB extraction limit."
+            ],
+        )
+
+    if suffix in _LEGACY_OFFICE:
+        modern_suffix, family = _LEGACY_OFFICE[suffix]
+        if data.startswith(_ZIP_MAGIC):
+            # Mislabeled modern file: read it as what it really is.
+            return extract_bytes(Path(name).with_suffix(modern_suffix).name, data)
+        if data.startswith(_OLE_MAGIC):
+            if suffix == ".xls":
+                sections, warnings = _extract_xls(data)
+            elif suffix == ".doc":
+                sections, warnings = _extract_doc(data)
+            else:
+                sections, warnings = _extract_ppt(data)
+            return _finalize(name, kind, sections, warnings)
+        return Extracted(
+            name, kind,
+            warnings=[
+                f"'{suffix}' is not a valid {family} document (neither a modern "
+                "Office file nor a legacy OLE binary)."
             ],
         )
 
@@ -868,6 +948,13 @@ def extract_bytes(filename: str, data: bytes) -> Extracted:
             warnings=[f"Extraction failed ({type(exc).__name__}): {exc}"],
         )
 
+    return _finalize(name, kind, sections, warnings)
+
+
+def _finalize(
+    name: str, kind: str, sections: list[Section], warnings: list[str]
+) -> Extracted:
+    """Trim per-section text to the cap and build the result."""
     trimmed = [
         Section(section.label, section.text[:MAX_SECTION_CHARS]) for section in sections
     ]

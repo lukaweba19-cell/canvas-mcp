@@ -47,8 +47,10 @@ you which files are readable, then `read_course_material` +
   cap: download it and open it locally.
 - `read_course_material(course_identifier, file_id, full_text=True)` — extract
   a file's text and get it back in the same call: PDF, scanned PDF via built-in
-  OCR, PPTX with speaker notes, DOCX, XLSX, IPYNB, transcripts, and source
-  files including Ruby/Rails (`.rb`, `.erb`, `.rake`). A PPTX always reads per
+  OCR, PPTX with speaker notes, DOCX, XLSX, IPYNB, transcripts, source files
+  including Ruby/Rails (`.rb`, `.erb`, `.rake`), and the legacy Office formats
+  (`.doc` and `.xls` are read directly; `.ppt` is converted with a local
+  LibreOffice, and says so if it is missing). A PPTX always reads per
   slide. A PDF reads per slide (`Slide 1`, `Slide 2`, ...) only when every page
   repeats one landscape, slide-sized page box and the text is slide-sparse — a
   landscape report, table or wide handout stays `p.N`, so labels are never

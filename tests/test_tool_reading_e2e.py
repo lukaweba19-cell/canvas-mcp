@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import pytest
 from fixtures import (
+    build_doc,
     build_image_only_pdf,
     build_legacy_office,
     build_pptx,
@@ -27,6 +28,7 @@ FILES = [
     {"id": 402, "display_name": "scan.pdf", "filename": "scan.pdf"},
     {"id": 403, "display_name": "deck.pptx", "filename": "deck.pptx"},
     {"id": 404, "display_name": "old-notes.doc", "filename": "old-notes.doc"},
+    {"id": 405, "display_name": "broken.doc", "filename": "broken.doc"},
 ]
 
 _SCAN_JPEG = jpeg_with_text("RECURSION BASE CASE")
@@ -46,7 +48,8 @@ PAYLOADS = {
             }
         ]
     ),
-    404: build_legacy_office(),
+    404: build_doc("Legacy notes on recursion"),
+    405: build_legacy_office(),
 }
 
 
@@ -129,20 +132,26 @@ async def test_pptx_text_and_speaker_notes_come_back_through_the_real_tools(cour
     assert "Proof by exchange argument" in slide, "speaker notes must survive"
 
 
-async def test_legacy_doc_is_an_explicit_refusal_through_the_real_tools(course, mcp):
+async def test_legacy_doc_is_read_through_the_real_tools(course, mcp):
     before = await call(mcp, "get_course_content_map", course_identifier=231)
-    assert "NOT readable — legacy .doc" in _line(before, "file_id=404")
+    assert "unread — extractable format" in _line(before, "file_id=404")
 
-    read = await call(mcp, "read_course_material", course_identifier=231, file_id=404)
-
-    assert "Status: NOT readable — legacy .doc" in read
-    assert ".docx" in read
-    assert "words extracted" not in read
+    read = await call(
+        mcp, "read_course_material", course_identifier=231, file_id=404, full_text=True
+    )
+    assert "Status: readable — " in read, read
+    assert "Legacy notes on recursion" in read
 
     report = await call(mcp, "get_course_content_map", course_identifier=231)
-    line = _line(report, "file_id=404")
-    assert "NOT readable — legacy .doc" in line
-    assert ".docx" in line
+    assert "words extracted" in _line(report, "file_id=404")
+
+
+async def test_broken_legacy_doc_is_an_honest_failure(course, mcp):
+    read = await call(mcp, "read_course_material", course_identifier=231, file_id=405)
+
+    assert "Status: NOT readable — extraction failed" in read
+    assert ".docx" in read
+    assert "words extracted" not in read
 
 
 async def test_study_guide_built_from_read_material_round_trips(course, mcp):

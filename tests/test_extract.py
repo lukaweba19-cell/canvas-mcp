@@ -91,14 +91,15 @@ def test_docx_paragraphs_are_extracted():
     assert "Second paragraph." in result.text
 
 
-def test_legacy_doc_is_refused_with_a_conversion_step():
+def test_broken_legacy_doc_is_named_failed_not_empty():
+    """A corrupt OLE container must say it could not be parsed, never "empty"."""
     result = extract.extract_bytes("notes.doc", build_legacy_office())
 
     status = result.status
     assert not status.readable
-    assert status.reason == "legacy_office"
-    assert status.label().startswith("NOT readable — legacy .doc")
+    assert status.reason == "failed"
     assert ".docx" in status.label()
+    assert "empty" not in status.label().lower()
 
 
 def test_a_doc_that_is_really_a_docx_is_read():

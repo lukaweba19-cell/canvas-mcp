@@ -22,8 +22,8 @@ from mcp.types import ToolAnnotations
 from ..core import extract, student_store
 from ..core.cache import get_course_code, get_course_id
 from ..core.client import (
-    canvas_authenticated_client,
     fetch_all_paginated_results,
+    iter_canvas_file_bytes,
     make_canvas_request,
 )
 from ..core.config import get_config
@@ -127,15 +127,10 @@ def register_shared_file_tools(mcp: FastMCP) -> None:
         try:
             total_bytes = 0
             with os.fdopen(fd, 'wb') as f:
-                async with canvas_authenticated_client() as client:
-                    async with client.stream(
-                        "GET", download_url, follow_redirects=True
-                    ) as response:
-                        response.raise_for_status()
-
-                        async for chunk in response.aiter_bytes(chunk_size=8192):
-                            f.write(chunk)
-                            total_bytes += len(chunk)
+                # Token only to Canvas; the storage redirect is unauthenticated.
+                async for chunk in iter_canvas_file_bytes(download_url):
+                    f.write(chunk)
+                    total_bytes += len(chunk)
         except Exception as e:
             # We created this path, so a failed download leaves a truncated or
             # empty file that a later reader could mistake for real content.
@@ -220,17 +215,13 @@ def register_shared_file_tools(mcp: FastMCP) -> None:
         # Download the file content into memory
         try:
             buffer = bytearray()
-            async with canvas_authenticated_client() as client:
-                async with client.stream("GET", download_url, follow_redirects=True) as response:
-                    response.raise_for_status()
-
-                    async for chunk in response.aiter_bytes(chunk_size=8192):
-                        if len(buffer) + len(chunk) > max_size_bytes:
-                            return (
-                                f"Error: File '{filename}' exceeds the {effective_max_mb} MB limit "
-                                f"during download. Use download_course_file instead for large files."
-                            )
-                        buffer.extend(chunk)
+            async for chunk in iter_canvas_file_bytes(download_url):
+                if len(buffer) + len(chunk) > max_size_bytes:
+                    return (
+                        f"Error: File '{filename}' exceeds the {effective_max_mb} MB limit "
+                        f"during download. Use download_course_file instead for large files."
+                    )
+                buffer.extend(chunk)
 
             base64_content = base64.b64encode(buffer).decode("ascii")
 

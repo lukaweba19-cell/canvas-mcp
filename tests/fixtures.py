@@ -189,8 +189,29 @@ def build_image_only_pdf(jpegs: list[tuple[bytes, int, int]]) -> bytes:
 
 
 def build_legacy_office(payload: bytes = b"Word 97 binary body") -> bytes:
-    """Bytes shaped like a legacy Word .doc: the OLE compound-file magic + body."""
+    """A broken OLE container: the compound-file magic followed by junk."""
     return b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1" + b"\x00" * 16 + payload
+
+
+def build_doc(text: str = "Hello legacy doc") -> bytes:
+    """A real Word 97-2003 .doc (OLE + Word piece table), readable as text."""
+    from legacy_doc_fixture import build_doc as _build_doc
+
+    return _build_doc(text)
+
+
+def build_xls(rows: list[list[str]]) -> bytes:
+    """A real Excel 97-2003 .xls workbook with one sheet of text rows."""
+    import xlwt
+
+    workbook = xlwt.Workbook()
+    sheet = workbook.add_sheet("Sheet1")
+    for row_index, row in enumerate(rows):
+        for column_index, value in enumerate(row):
+            sheet.write(row_index, column_index, value)
+    buffer = _io.BytesIO()
+    workbook.save(buffer)
+    return buffer.getvalue()
 
 
 def jpeg_with_text(text: str, width: int = 1200, height: int = 300) -> tuple[bytes, int, int]:
