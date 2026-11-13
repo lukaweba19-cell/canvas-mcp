@@ -428,10 +428,18 @@ def _describe_cached(record: dict[str, Any], cache_path: str) -> str:
             lines.append("  " + ocr.unavailable_reason())
 
     if not extracted.word_count:
-        lines.append(
-            "\nNo readable text was extracted from this file. It is image-only, so the "
-            "text has to come from OCR (or from a transcript, if one is posted)."
-        )
+        if not extract.is_readable(record.get("filename", "")):
+            lines.append(
+                "\nThis file type cannot be read as text at all (audio, video, image or "
+                "archive). Nothing was skipped silently: for a lecture video, look for a "
+                "caption/transcript file (.vtt/.srt) — get_course_content_map lists any "
+                "that exist and names the matching file_id."
+            )
+        else:
+            lines.append(
+                "\nNo readable text was extracted from this file. It is image-only, so the "
+                "text has to come from OCR (or from a transcript, if one is posted)."
+            )
         return "\n".join(lines)
 
     toc_lines = extracted.toc(max_labels=_MAX_TOC_LINES).splitlines()

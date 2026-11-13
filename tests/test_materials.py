@@ -170,3 +170,34 @@ async def test_reading_a_section_before_extraction_says_what_to_do(course, mcp):
 async def test_non_numeric_file_id_is_refused(course, mcp):
     result = await call(mcp, "read_course_material", course_identifier=225, file_id="../../etc")
     assert "numeric Canvas file ID" in result
+
+
+async def test_unreadable_file_type_says_what_to_do_instead(course, downloads, mcp, monkeypatch):
+    course.route("get", "/courses/225/files/902", {
+        "id": 902, "display_name": "intro.mp4", "url": "https://files.example/902",
+    })
+
+    async def video_bytes(url: str):
+        return b"\x00\x01\x02video", None
+
+    monkeypatch.setattr(materials_module, "_download_course_file_bytes", video_bytes)
+
+    result = await call(mcp, "read_course_material", course_identifier=225, file_id=902)
+
+    assert "cannot be read as text at all" in result
+    assert ".vtt" in result, "a video must point at its transcript, not just fail"
+    assert "get_course_content_map" in result
+
+
+async def test_read_page_text_returns_prose_and_caches_it(course, mcp):
+    course.route("get", "/courses/225/pages/notes", {
+        "title": "Week 3 notes",
+        "body": "<h1>Hash maps</h1><p>Expected O(1) lookup.</p><script>x()</script>",
+    })
+
+    result = await call(mcp, "read_page_text", course_identifier=225, page_url_or_id="notes")
+
+    assert "Hash maps" in result
+    assert "Expected O(1) lookup." in result
+    assert "Cached:" in result
+    assert "x()" not in result, "script contents must not read as prose"
