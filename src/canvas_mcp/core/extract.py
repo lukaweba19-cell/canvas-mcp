@@ -6,8 +6,11 @@ are usually the professor's own explanation of what matters) once, and caches
 the result so repeat reads cost nothing.
 
 Formats:
-- PDF               -> one section per page (a landscape deck exported to PDF
-                       is labeled per slide), via pypdf
+- PDF               -> one section per page, via pypdf. A PDF is read as slides
+                       (Slide 1, Slide 2, ...) only when every page repeats one
+                       landscape, slide-sized page box (4:3 to 16:9) and the text
+                       is slide-sparse; a landscape report or handout therefore
+                       stays p.1, p.2, ...
 - PPTX/PPTM         -> one section per slide + its notes
 - DOCX              -> one section for the document
 - XLSX              -> one section per sheet
@@ -54,10 +57,20 @@ MAX_SECTION_CHARS = 40_000
 _MAX_OCR_IMAGES_PER_SLIDE = 3
 _MAX_OCR_DOCX_IMAGES = 5
 
+# Telling a slide deck from a landscape handout takes two independent clues: the
+# pages must share one landscape, slide-shaped size, and the text must be sparse
+# enough to be slide bodies. Page shape alone would mislabel landscape reports.
+_SLIDE_ASPECT_RANGE = (1.2, 1.9)  # 4:3 = 1.33, 16:10 = 1.6, 16:9 = 1.78
+_SLIDE_PAGE_SIZE_TOLERANCE = 2.0  # PDF points: an exported deck repeats one box
+_SLIDE_MEDIAN_WORDS_MAX = 150
+_SLIDE_MAX_WORDS = 250
+
 _READABLE_SUFFIXES = {
     ".pdf", ".pptx", ".pptm", ".docx", ".xlsx", ".xlsm", ".ipynb",
     ".html", ".htm", ".txt", ".md", ".markdown", ".csv", ".json",
     ".py", ".js", ".ts", ".java", ".c", ".cpp", ".rb", ".go", ".rs",
+    # Ruby/Rails course files: views and Rake tasks are plain source too.
+    ".erb", ".rake",
     ".sql", ".r", ".rmd", ".xml", ".yaml", ".yml", ".tex",
     # Caption tracks and lecture transcripts: the readable form of a video.
     ".vtt", ".srt", ".webvtt",
@@ -587,49 +600,92 @@ def _extract_transcript(text: str) -> tuple[list[Section], list[str]]:
     return [Section("Transcript", body)], []
 
 
-def _page_is_landscape(page) -> bool:
-    """Whether a PDF page is wider than tall, which is how decks are exported."""
+def _page_box(page) -> tuple[float, float] | None:
+    """Render-aware page size, or None when the PDF's page box cannot be read."""
     try:
         width = float(page.mediabox.width)
         height = float(page.mediabox.height)
     except Exception:
-        return False
+        return None
     try:
         rotation = int(page.get("/Rotate", 0) or 0)
     except Exception:
         rotation = 0
     if rotation % 180 == 90:
         width, height = height, width
-    return width > height
+    return width, height
 
 
-def _pdf_is_slide_deck(pages) -> bool:
-    """A lecture deck exported to PDF is landscape on every page; a document is not.
+def _pages_share_slide_shape(boxes: list[tuple[float, float]]) -> bool:
+    """One repeated landscape page size at a slide aspect ratio (4:3 ... 16:9)."""
+    if len(boxes) < 2:
+        return False
+    width, height = boxes[0]
+    if height <= 0 or width <= height:
+        return False
+    if not (_SLIDE_ASPECT_RANGE[0] <= width / height <= _SLIDE_ASPECT_RANGE[1]):
+        return False
+    return all(
+        abs(other_width - width) <= _SLIDE_PAGE_SIZE_TOLERANCE
+        and abs(other_height - height) <= _SLIDE_PAGE_SIZE_TOLERANCE
+        for other_width, other_height in boxes
+    )
 
-    Canvas hands over slides as PDFs constantly. Labeling those pages ``Slide N``
-    (instead of ``p.N``) keeps section reads, the budget cut and the unread list
-    talking about the same things the professor's deck does.
+
+def _text_is_slide_shaped(texts: list[str]) -> bool:
+    """Slides hold a title and bullets; a prose page is a block of paragraphs."""
+    counts = sorted(len(text.split()) for text in texts)
+    if not counts:
+        return False
+    median = counts[len(counts) // 2]
+    return median <= _SLIDE_MEDIAN_WORDS_MAX and counts[-1] <= _SLIDE_MAX_WORDS
+
+
+def _pdf_looks_like_a_deck(pages, texts: list[str]) -> bool:
+    """Both clues must agree: repeated slide-shaped pages *and* slide-sparse text.
+
+    Canvas hands over lecture slides as PDFs constantly, and labeling those pages
+    ``Slide N`` (instead of ``p.N``) keeps section reads, the budget cut and the
+    unread list talking about the same things the professor's deck does. The text
+    check is what stops a landscape report, table or wide handout — same page
+    shape, paragraphs of prose — from being mislabelled as a slide deck.
     """
     pages = list(pages)
-    return len(pages) > 1 and all(_page_is_landscape(page) for page in pages)
+    boxes = [box for box in (_page_box(page) for page in pages) if box is not None]
+    if len(boxes) != len(pages):
+        return False
+    return _pages_share_slide_shape(boxes) and _text_is_slide_shaped(texts)
 
 
 def _extract_pdf(data: bytes) -> tuple[list[Section], list[str]]:
     warnings: list[str] = []
     reader = PdfReader(io.BytesIO(data))
     pages = list(reader.pages)
-    deck = _pdf_is_slide_deck(pages)
-    noun, nouns = ("slide", "slides") if deck else ("page", "pages")
-    sections: list[Section] = []
+
+    # Text comes first: whether this is a deck depends on how the pages read, not
+    # only on their shape, so labels are chosen after the text is in hand.
+    texts: list[str] = []
+    unreadable: list[tuple[int, str]] = []
     for index, page in enumerate(pages, start=1):
-        label = f"Slide {index}" if deck else f"p.{index}"
         try:
             text = page.extract_text() or ""
         except Exception as exc:  # a broken page must not lose the whole file
             text = ""
-            warnings.append(f"{label} could not be read: {type(exc).__name__}")
-        cleaned = re.sub(r"\n{3,}", "\n\n", text).strip()
-        sections.append(Section(label, cleaned))
+            unreadable.append((index, type(exc).__name__))
+        texts.append(re.sub(r"\n{3,}", "\n\n", text).strip())
+
+    deck = _pdf_looks_like_a_deck(pages, texts)
+    noun, nouns = ("slide", "slides") if deck else ("page", "pages")
+
+    def label_for(number: int) -> str:
+        return f"Slide {number}" if deck else f"p.{number}"
+
+    for number, error in unreadable:
+        warnings.append(f"{label_for(number)} could not be read: {error}")
+
+    sections = [
+        Section(label_for(index), text) for index, text in enumerate(texts, start=1)
+    ]
 
     empty = [index for index, section in enumerate(sections) if not section.text.strip()]
     if not empty:

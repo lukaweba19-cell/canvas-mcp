@@ -152,6 +152,11 @@ def build_slide_pdf(slides: list[str]) -> bytes:
     return build_text_pdf(slides, size=(960, 540))
 
 
+def build_landscape_prose_pdf(pages: list[str]) -> bytes:
+    """Landscape letter pages of dense prose: the same shape as a deck, not one."""
+    return build_text_pdf(pages, size=(792, 612))
+
+
 def build_image_only_pdf(jpegs: list[tuple[bytes, int, int]]) -> bytes:
     """A PDF where every page is one JPEG and there is no text layer."""
     objects: list[bytes] = [b"<</Type/Catalog/Pages 2 0 R>>"]

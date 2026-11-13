@@ -10,7 +10,12 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
-from fixtures import build_pptx, build_slide_pdf, build_text_pdf
+from fixtures import (
+    build_landscape_prose_pdf,
+    build_pptx,
+    build_slide_pdf,
+    build_text_pdf,
+)
 from helpers import call
 
 from canvas_mcp.core import extract
@@ -40,6 +45,15 @@ SLIDE_DECK = build_slide_pdf(
     ]
 )
 BLANK_SLIDE_DECK = build_slide_pdf(["Deck intro", "", "Deck conclusion"])
+
+_PROSE = (
+    "The quarterly report reviews staffing, budgets, timelines and risks for "
+    "each regional office, and records the decisions the committee made."
+)
+# Landscape letter pages of prose: the shape of a deck, the text of a document.
+LANDSCAPE_PROSE = build_landscape_prose_pdf(
+    [f"Page {n}. " + _PROSE * 14 for n in range(1, 7)]
+)
 
 # Alternating long/short pages: p.2 is the first that cannot fit in 1000 chars,
 # and p.3/p.5 would fit afterwards, so a skip-and-resume cut would show them.
@@ -80,6 +94,7 @@ def file_server():
         "/long.pdf": LONG,
         "/slides.pdf": SLIDE_DECK,
         "/deck-blank.pdf": BLANK_SLIDE_DECK,
+        "/handout.pdf": LANDSCAPE_PROSE,
         "/scan.pdf": build_text_pdf(["", ""]),
         "/big.pdf": b"%PDF-1.4\n" + b"x" * (2 * 1024 * 1024),
     }
@@ -200,6 +215,28 @@ async def test_pdf_deck_is_read_slide_by_slide_with_the_budget_cut(canvas, file_
     # The cut note names the unread slides and how many there are.
     assert "4 more section(s) not shown" in text
     assert "starting at 'Slide 2'" in text
+
+
+async def test_landscape_handout_reads_as_pages_not_slides(canvas, file_server, mcp):
+    """Wide pages full of prose are a document; labelling them slides would lie."""
+    _route_file(canvas, file_server, 510, "handout.pdf", "/handout.pdf")
+
+    text = await call(
+        mcp,
+        "read_course_material",
+        course_identifier=225,
+        file_id=510,
+        full_text=True,
+        max_chars=100_000,
+    )
+
+    assert "## p.1" in text
+    assert "## Slide" not in text
+    assert "Page 1." in text
+
+    index = await call(mcp, "read_course_material", course_identifier=225, file_id=510)
+    assert "- p.1: " in index
+    assert "Slide" not in index
 
 
 async def test_pdf_deck_slides_are_addressable_by_label(canvas, file_server, mcp):

@@ -6,6 +6,7 @@ from fixtures import (
     build_docx,
     build_image_only_pdf,
     build_ipynb,
+    build_landscape_prose_pdf,
     build_legacy_office,
     build_pptx,
     build_slide_pdf,
@@ -157,6 +158,38 @@ def test_landscape_pdf_deck_is_labeled_and_read_by_slide():
     assert result.section("Slide 2").text == "Depth first search"
     assert "Breadth first" in result.text
     assert "p.1" not in result.toc(), "a deck must not be indexed as document pages"
+
+
+PROSE_SENTENCE = (
+    "The quarterly report reviews staffing, budgets, timelines and risks for "
+    "each regional office, and records the decisions the committee made."
+)
+
+
+def test_landscape_prose_document_is_read_as_pages_not_slides():
+    """A wide handout has slide-shaped pages but paragraphs, so it is not a deck."""
+    pages = [f"Page {n}. " + PROSE_SENTENCE * 14 for n in range(1, 7)]
+    result = extract.extract_bytes("handout.pdf", build_landscape_prose_pdf(pages))
+
+    assert [section.label for section in result.sections] == [
+        "p.1", "p.2", "p.3", "p.4", "p.5", "p.6"
+    ]
+    assert "Slide" not in result.toc(), "prose must never be labelled as slides"
+    assert "Page 3." in result.section("p.3").text
+
+
+def test_ruby_and_rails_source_files_are_read_as_text():
+    """Ruby/Rails course files are source text, not an unreadable format."""
+    files = {
+        "routes.rb": "Rails.application.routes.draw do\n  get '/courses', to: 'courses#index'\nend",
+        "index.html.erb": "<h1>Courses</h1>\n<% @courses.each do |course| %>\n  <li><%= course.name %></li>\n<% end %>",
+        "report.rake": "task :report do\n  puts 'weekly report'\nend",
+    }
+
+    for name, source in files.items():
+        result = extract.extract_bytes(name, source.encode())
+        assert result.status.readable, name
+        assert source.splitlines()[0] in result.text, name
 
 
 def test_image_only_pdf_with_a_broken_ocr_install_explains_the_fix(monkeypatch):

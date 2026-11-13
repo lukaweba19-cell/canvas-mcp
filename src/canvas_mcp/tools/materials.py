@@ -731,8 +731,13 @@ def _describe_cached(record: dict[str, Any], cache_path: str) -> str:
     toc_lines = extracted.toc(max_labels=_MAX_TOC_LINES).splitlines()
     lines.append("\nSections:")
     lines.extend(toc_lines)
+    # Name a label this file actually has: "Slide 3" is wrong for a p.N document.
+    example = next(
+        (section.label for section in extracted.sections if section.text.strip()),
+        extracted.sections[0].label if extracted.sections else "1",
+    )
     lines.append(
-        "\nNext: call read_material_section(file_id=..., section='Slide 3') to read "
-        "the parts you need for notes or a study guide."
+        f"\nNext: call read_material_section(file_id=..., section='{example}') to "
+        "read the parts you need for notes or a study guide."
     )
     return "\n".join(lines)
