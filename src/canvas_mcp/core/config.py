@@ -188,6 +188,10 @@ class Config:
         self.max_concurrent_requests = _int_env("MAX_CONCURRENT_REQUESTS", 10)
         self.read_file_max_size_mb = _float_env("READ_FILE_MAX_SIZE_MB", 100.0)
 
+        # Local student workspace: extracted material, study guides, notes,
+        # drafts and the work journal. Empty means ~/.canvas-mcp/student.
+        self.student_dir = os.getenv("CANVAS_STUDENT_DIR", "").strip()
+
         # Development configuration
         self.log_level = os.getenv("LOG_LEVEL", "INFO").upper()
         self.log_api_requests = _bool_env("LOG_API_REQUESTS", False)

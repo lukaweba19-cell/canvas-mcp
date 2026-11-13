@@ -39,6 +39,7 @@ from typing import Any
 from fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 
+from ..core import student_store
 from ..core.cache import get_course_id
 from ..core.client import make_canvas_request, upload_file_to_storage
 from ..core.config import get_config
@@ -659,6 +660,7 @@ def register_student_write_tools(mcp: FastMCP) -> None:
             file_contents: list[dict[str, str]] | None = None,
             comment: str | None = None,
             confirmation_token: str | None = None,
+            from_draft: bool = False,
         ) -> str:
             """Submit one of YOUR OWN assignments. Consumes an attempt.
 
@@ -679,6 +681,7 @@ def register_student_write_tools(mcp: FastMCP) -> None:
                 file_contents: Inline files as [{"name": ..., "content_base64": ...}]
                 comment: Optional comment to include with the submission
                 confirmation_token: Token from the preview call; omit to preview
+                from_draft: Submit the latest saved draft (online_text_entry only)
             """
             if submission_type not in _SUPPORTED_TYPES:
                 return (
@@ -705,6 +708,19 @@ def register_student_write_tools(mcp: FastMCP) -> None:
             # a submission body or its comment.
             if contains_fence_markers(body or "") or contains_fence_markers(comment or ""):
                 return FENCE_LEAK_ERROR
+
+            if from_draft:
+                # Submit what the student already reviewed on disk, not a
+                # re-typed copy: save_assignment_draft -> read -> submit.
+                if submission_type != "online_text_entry":
+                    return "Error: from_draft only applies to online_text_entry submissions."
+                draft = student_store.read_draft(course_id, assignment_id)
+                if draft is None:
+                    return (
+                        "Error: no saved draft for this assignment. Use "
+                        "save_assignment_draft first, or pass body explicitly."
+                    )
+                body = draft["content"]
 
             if submission_type == "online_text_entry" and not body:
                 return "Error: online_text_entry requires 'body'"

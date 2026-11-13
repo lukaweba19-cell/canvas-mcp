@@ -35,6 +35,7 @@ from .resources import register_resources_and_prompts
 from .tools import (
     register_course_tools,
     register_discovery_tools,
+    register_material_tools,
     register_rubric_tools,
     register_self_identity_tools,
     register_shared_assignment_tools,
@@ -43,8 +44,11 @@ from .tools import (
     register_shared_file_tools,
     register_shared_messaging_tools,
     register_shared_module_tools,
+    register_student_insight_tools,
     register_student_tools,
     register_student_write_tools,
+    register_study_tools,
+    register_workspace_tools,
 )
 
 
@@ -162,7 +166,14 @@ def register_all_tools(mcp: FastMCP) -> None:
 
     # Student-specific reads, plus the write tools the operator enables.
     register_student_tools(mcp)
+    register_student_insight_tools(mcp)
     register_student_write_tools(mcp)
+
+    # Course material extraction (PDF, slides, Word), study guides, and the
+    # local workspace for drafts, notes, journal and voice.
+    register_material_tools(mcp)
+    register_study_tools(mcp)
+    register_workspace_tools(mcp)
 
     register_resources_and_prompts(mcp)
     log_info("Canvas student MCP tools registered successfully!")
