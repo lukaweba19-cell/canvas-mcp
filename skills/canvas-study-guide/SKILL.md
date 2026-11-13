@@ -14,10 +14,19 @@ student can revise from — not a summary of everything, only what carries marks
 
 `get_course_content_map(course_identifier)`.
 
-This lists every module item and file with whether its text is readable. Note
-which files are `readable` and which are `NOT readable as text` (images, video,
-Panopto/Kaltura links). Those cannot be studied this way and must be named in
-the coverage report.
+Each file carries a real status, not just a guess from its extension:
+
+- `readable — N words extracted`: the text was pulled out and can be studied.
+- `unread — extractable format`: never opened yet; call `read_course_material`
+  (or `read_course_file`) before deciding anything about it.
+- `NOT readable — image-only`: every page/slide is a picture with no text
+  layer. Say so, suggest `uv sync --extra ocr` (a re-read with OCR enabled, or a
+  posted transcript, is the only way in), and name it in the coverage report.
+- `NOT readable — empty`: valid file, no content at all.
+- `NOT readable — unsupported format`: video/audio/archive; look for a
+  caption/transcript file instead (Panopto/Kaltura links are the same story).
+
+Never treat `unread` or any `NOT readable` line as if it had been studied.
 
 ### 2. Read the material
 
