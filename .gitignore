@@ -21,3 +21,6 @@ node_modules/
 
 # Local student workspace (notes, drafts, extracted course material)
 .canvas-student/
+
+# Temporary clean-checkout used for verification
+.verify-clean/
