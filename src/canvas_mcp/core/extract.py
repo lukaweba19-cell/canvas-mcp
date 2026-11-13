@@ -69,8 +69,8 @@ _READABLE_SUFFIXES = {
     ".pdf", ".pptx", ".pptm", ".docx", ".xlsx", ".xlsm", ".ipynb",
     ".html", ".htm", ".txt", ".md", ".markdown", ".csv", ".json",
     ".py", ".js", ".ts", ".java", ".c", ".cpp", ".rb", ".go", ".rs",
-    # Ruby/Rails course files: views and Rake tasks are plain source too.
-    ".erb", ".rake",
+    # Ruby/Rails course files: views, Rake tasks, gemspecs and rackups are source.
+    ".erb", ".rake", ".gemspec", ".ru",
     ".sql", ".r", ".rmd", ".xml", ".yaml", ".yml", ".tex",
     # Caption tracks and lecture transcripts: the readable form of a video.
     ".vtt", ".srt", ".webvtt",
@@ -93,6 +93,12 @@ _LEGACY_CONVERSION = (
 )
 
 _TRANSCRIPT_SUFFIXES = {".vtt", ".srt", ".webvtt"}
+
+# Rails-era project files with no extension at all. A Canvas course on Rails
+# hands these over as downloads, and they are plain text like any other source.
+_TEXT_BASENAMES = frozenset(
+    {"gemfile", "rakefile", "procfile", "capfile", "dockerfile"}
+)
 
 _SLIDE_RE = re.compile(r"ppt/slides/slide(\d+)\.xml$")
 _NOTES_RE = re.compile(r"ppt/notesSlides/notesSlide(\d+)\.xml$")
@@ -173,7 +179,10 @@ class Extracted:
 
 def is_readable(filename: str) -> bool:
     """Whether this module can pull text out of the file."""
-    return Path(filename).suffix.lower() in _READABLE_SUFFIXES
+    path = Path(filename)
+    if path.suffix.lower() in _READABLE_SUFFIXES:
+        return True
+    return path.name.lower() in _TEXT_BASENAMES
 
 
 def is_transcript(filename: str) -> bool:
@@ -835,7 +844,7 @@ def extract_bytes(filename: str, data: bytes) -> Extracted:
                 sections, warnings = [], [_BINARY_HINT]
             else:
                 sections, warnings = [Section("Page", html_to_text(decoded))], []
-        elif suffix in _READABLE_SUFFIXES:
+        elif suffix in _READABLE_SUFFIXES or Path(name).name.lower() in _TEXT_BASENAMES:
             decoded = _decode_text(data)
             if decoded is None:
                 sections, warnings = [], [_BINARY_HINT]

@@ -184,6 +184,12 @@ def test_ruby_and_rails_source_files_are_read_as_text():
         "routes.rb": "Rails.application.routes.draw do\n  get '/courses', to: 'courses#index'\nend",
         "index.html.erb": "<h1>Courses</h1>\n<% @courses.each do |course| %>\n  <li><%= course.name %></li>\n<% end %>",
         "report.rake": "task :report do\n  puts 'weekly report'\nend",
+        "course.gemspec": "Gem::Specification.new do |spec|\n  spec.name = 'course'\nend",
+        "config.ru": "run Rails.application\n",
+        # Rails-era project files have no extension to key off, so they are
+        # recognised by name instead of being refused as an unknown format.
+        "Gemfile": "source 'https://rubygems.org'\ngem 'rails', '~> 7.1'\n",
+        "Rakefile": "require_relative 'config/application'\n",
     }
 
     for name, source in files.items():
