@@ -186,6 +186,7 @@ _ENCODING_WARNING = re.compile(
 _LEGACY_WARNING = re.compile(
     r"legacy (Word|PowerPoint|Excel) 97", re.IGNORECASE
 )
+_TOO_LARGE_WARNING = re.compile(r"over the \d+ MB extraction limit", re.IGNORECASE)
 _FAILED_WARNING = re.compile(
     r"corrupt|extraction failed|could not be read|not (a )?valid", re.IGNORECASE
 )
@@ -201,6 +202,7 @@ REASON_LABELS = {
     "unsupported": "unsupported format",
     "encoding": "unsupported encoding",
     "legacy_office": "legacy Office file",
+    "too_large": "file too large",
     "failed": "extraction failed",
     "quiz": "quiz",
     "embedded": "embedded video/LTI",
@@ -261,6 +263,13 @@ def status_from_parts(
     joined = " ".join(warnings)
     if _UNSUPPORTED_WARNING.search(joined):
         return ContentStatus(False, "unsupported", _unsupported_detail(filename))
+    if _TOO_LARGE_WARNING.search(joined):
+        return ContentStatus(
+            False,
+            "too_large",
+            f"it is over the {MAX_EXTRACT_BYTES // (1024 * 1024)} MB extraction limit",
+            kind="file too large",
+        )
     if _LEGACY_WARNING.search(joined):
         suffix = Path(filename).suffix.lower()
         return ContentStatus(

@@ -122,7 +122,13 @@ async def test_tool_count_is_pinned(mcp):
 
 async def test_new_tool_schemas_are_usable(mcp):
     readers = (await mcp.get_tool("read_course_material")).parameters
-    assert set(readers["properties"]) == {"course_identifier", "file_id", "refresh"}
+    assert set(readers["properties"]) == {
+        "course_identifier",
+        "file_id",
+        "refresh",
+        "full_text",
+        "max_chars",
+    }
     assert {"course_identifier", "file_id"} <= set(readers["required"])
 
     submit = (await mcp.get_tool("submit_assignment")).parameters

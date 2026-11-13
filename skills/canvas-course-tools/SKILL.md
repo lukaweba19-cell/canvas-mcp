@@ -43,10 +43,13 @@ you which files are readable, then `read_course_material` +
 - `list_course_files(course_identifier, search_term=...)` — every file with a
   real content status: `readable — N words extracted`, `unread`,
   `NOT readable — image-only / empty / unsupported format / unsupported encoding
-  / legacy .doc`.
-- `read_course_material(course_identifier, file_id)` — extract text (PDF,
-  scanned PDF via built-in OCR, PPTX + speaker notes, DOCX, XLSX, IPYNB,
-  transcripts) and get a section index.
+  / legacy .doc / file too large`. "Too large" means over the 60 MB extraction
+  cap: download it and open it locally.
+- `read_course_material(course_identifier, file_id, full_text=True)` — extract
+  a file's text and get it back in the same call: PDF, scanned PDF via built-in
+  OCR, PPTX with speaker notes, DOCX, XLSX, IPYNB, transcripts. Leave
+  `full_text` off for a section index of a long deck; add `max_chars` to raise
+  the budget. Long files stop at a section boundary and name the next call.
 - `download_course_file(course_identifier, file_id)` — only for a file this
   server cannot read (e.g. an archive), and only on a local stdio server; it
   writes to the server's disk.

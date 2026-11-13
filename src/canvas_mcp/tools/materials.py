@@ -54,6 +54,7 @@ _STATUS_ORDER = {
     "external": 0,
     "unknown_item": 0,
     "legacy_office": 0,
+    "too_large": 0,
     "not_read": 1,
     "text": 2,
 }
@@ -115,6 +116,7 @@ def readiness_lines(
         "unsupported",
         "encoding",
         "legacy_office",
+        "too_large",
         "failed",
     ):
         if reasons.get(reason):
@@ -388,6 +390,8 @@ def register_material_tools(mcp: FastMCP) -> None:
         course_identifier: str | int,
         file_id: str | int,
         refresh: bool = False,
+        full_text: bool = False,
+        max_chars: int = 12000,
     ) -> str:
         """Extract the text of a course file (PDF, slides, Word, Excel, notebook).
 
@@ -397,14 +401,18 @@ def register_material_tools(mcp: FastMCP) -> None:
         conversion step instead of an empty result.
 
         Downloads the file once, extracts text, caches it in the student
-        workspace, and returns a section index plus the cache path — NOT the
-        whole text. Read individual sections with read_material_section. Slide
-        speaker notes are included, since they usually say what matters.
+        workspace, and by default returns a section index plus the cache path —
+        call read_material_section for one section. Pass full_text=True to get
+        the extracted text itself in the same call (cut at a section boundary
+        when it exceeds max_chars, with the next call named). Slide speaker notes
+        are included, since they usually say what matters.
 
         Args:
             course_identifier: Course code or Canvas ID
             file_id: Canvas file ID (see get_course_content_map or list_course_files)
             refresh: Re-download and re-extract even if a cache exists
+            full_text: Return the extracted text, not just the index
+            max_chars: Character budget for full_text (default 12000, minimum 1000)
         """
         validated = coerce_canvas_id(file_id)
         if validated is None:
@@ -418,6 +426,8 @@ def register_material_tools(mcp: FastMCP) -> None:
         if cache and not refresh:
             cached = _load_cache(cache)
             if cached:
+                if full_text:
+                    return render_extracted_text(cached, str(cache), max_chars)
                 return _describe_cached(cached, str(cache))
 
         info = await make_canvas_request("get", f"/courses/{course_id}/files/{file_id}")
@@ -451,6 +461,8 @@ def register_material_tools(mcp: FastMCP) -> None:
         cache.write_text(json.dumps(record), encoding="utf-8")
         (cache.with_suffix(".orig")).write_bytes(data)
 
+        if full_text:
+            return render_extracted_text(record, str(cache), max_chars)
         return _describe_cached(record, str(cache))
 
     @mcp.tool(annotations=ToolAnnotations(read_only_hint=True))
@@ -573,6 +585,96 @@ def register_material_tools(mcp: FastMCP) -> None:
         )
 
 
+def _status_note(status: extract.ContentStatus) -> str:
+    """One paragraph explaining why a file has no text, and what to do."""
+    if status.reason == "unsupported":
+        return (
+            "This file type cannot be read as text at all (audio, video, image or "
+            "archive). Nothing was skipped silently: for a lecture video, look for a "
+            "caption/transcript file (.vtt/.srt) — get_course_content_map lists any "
+            "that exist and names the matching file_id."
+        )
+    if status.reason == "image_only":
+        return (
+            "No text exists in this file: every page/slide is an image. Built-in OCR "
+            + ("ran and found no text in it" if ocr.is_available()
+               else f"could not run ({ocr.unavailable_reason()})")
+            + ", so the text has to come from a better scan or a transcript if one "
+            "is posted."
+        )
+    if status.reason == "encoding":
+        return (
+            "This file has no readable text: its bytes are binary or not "
+            "UTF-8/UTF-16/Windows-1252 text. Ask for a PDF or plain-text copy."
+        )
+    if status.reason == "legacy_office":
+        return "This is a legacy Office binary file, not text. To read it, " + status.detail + "."
+    if status.reason == "too_large":
+        return (
+            "This file is too large to extract in one call: " + status.detail +
+            ". Download it with download_course_file and open it locally."
+        )
+    if status.reason == "failed":
+        return f"Extraction failed: {status.detail}"
+    return (
+        "This file is empty: it contains no text at all (not image-only, just "
+        "no content), so there is nothing to read."
+    )
+
+
+def render_extracted_text(
+    record: dict[str, Any], cache_path: str, max_chars: int = 12000
+) -> str:
+    """The extracted text itself, so one call can read a file end to end.
+
+    Non-reading files get the same honest status and reason as the index; a file
+    bigger than ``max_chars`` is cut at a section boundary with the exact next
+    call named, never silently truncated.
+    """
+    sections = record.get("sections", [])
+    extracted = extract.Extracted(
+        filename=record.get("filename", "file"),
+        kind=record.get("kind", "unknown"),
+        sections=[extract.Section(item["label"], item["text"]) for item in sections],
+        warnings=list(record.get("warnings") or []),
+    )
+    status = extracted.status
+    lines = [
+        f"Text: {fence_untrusted_inline(record.get('filename', 'file'), 'file name')}",
+        f"Status: {status.label()}",
+        f"Cache: {cache_path}",
+    ]
+    if not status.readable:
+        lines.append("\n" + _status_note(status))
+        return "\n".join(lines)
+
+    budget = max(1000, max_chars)
+    used = 0
+    included: list[str] = []
+    skipped: list[str] = []
+    for section in extracted.sections:
+        text = section.text.strip()
+        if not text:
+            continue
+        block = f"## {section.label}\n{text}"
+        if used + len(block) > budget:
+            skipped.append(section.label)
+            continue
+        included.append(block)
+        used += len(block)
+
+    lines.append("")
+    lines.extend(included)
+    if skipped:
+        lines.append(
+            f"\n...[stopped after {used} characters; {len(skipped)} more section(s): "
+            + ", ".join(skipped[:10])
+            + ". Read them with read_material_section(file_id=..., section='...')"
+            + ", or raise max_chars.]"
+        )
+    return "\n".join(lines)
+
+
 def _describe_cached(record: dict[str, Any], cache_path: str) -> str:
     """Render the index a caller sees after extraction."""
     sections = record.get("sections", [])
@@ -601,40 +703,7 @@ def _describe_cached(record: dict[str, Any], cache_path: str) -> str:
             lines.append("  " + ocr.unavailable_reason())
 
     if not extracted.word_count:
-        if status.reason == "unsupported":
-            lines.append(
-                "\nThis file type cannot be read as text at all (audio, video, image or "
-                "archive). Nothing was skipped silently: for a lecture video, look for a "
-                "caption/transcript file (.vtt/.srt) — get_course_content_map lists any "
-                "that exist and names the matching file_id."
-            )
-        elif status.reason == "image_only":
-            lines.append(
-                "\nNo text exists in this file: every page/slide is an image. Built-in "
-                "OCR "
-                + ("ran and found no text in it" if ocr.is_available()
-                   else f"could not run ({ocr.unavailable_reason()})")
-                + ", so the text has to come from a better scan or a transcript if one "
-                "is posted."
-            )
-        elif status.reason == "encoding":
-            lines.append(
-                "\nThis file has no readable text: its bytes are binary or not "
-                "UTF-8/UTF-16/Windows-1252 text. Ask for a PDF or plain-text copy."
-            )
-        elif status.reason == "legacy_office":
-            lines.append(
-                "\nThis is a legacy Office binary file, not text. To read it, "
-                + status.detail
-                + "."
-            )
-        elif status.reason == "failed":
-            lines.append(f"\nExtraction failed: {status.detail}")
-        else:
-            lines.append(
-                "\nThis file is empty: it contains no text at all (not image-only, just "
-                "no content), so there is nothing to read."
-            )
+        lines.append("\n" + _status_note(status))
         return "\n".join(lines)
 
     toc_lines = extracted.toc(max_labels=_MAX_TOC_LINES).splitlines()

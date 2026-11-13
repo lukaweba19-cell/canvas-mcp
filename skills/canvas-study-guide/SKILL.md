@@ -43,7 +43,9 @@ Never treat `unread` or any `NOT readable` line as if it had been studied.
 
 For each relevant file: `read_course_material(course_identifier, file_id)`.
 
-That returns an index (slides/pages with word counts), not the text. Then read
+Add `full_text=True` for a short PDF or deck and you get the whole text in one
+call (speaker notes included), which is usually what you want. The default
+returns an index (slides/pages with word counts), not the text. Then read
 the sections that matter: `read_material_section(course_identifier, file_id,
 section="Slide 12")`.
 
