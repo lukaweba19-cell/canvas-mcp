@@ -31,15 +31,10 @@ from .logging import log_debug, log_warning
 DEVTOOLS_PORT_FILE = "DevToolsActivePort"
 
 
-# ---------------------------------------------------------------------------
-# Chrome discovery
-# ---------------------------------------------------------------------------
 
 def _windows_candidates() -> list[str]:
     paths: list[str] = []
     try:
-        # Windows-only stdlib module: import dynamically so mypy on other
-        # platforms does not need winreg stubs, and keep its attributes Any.
         import importlib
 
         winreg: Any = importlib.import_module("winreg")
@@ -98,7 +93,6 @@ def chrome_candidates() -> list[str]:
                 "/usr/bin/chromium-browser",
             ]
         )
-    # De-duplicate while keeping order.
     seen: set[str] = set()
     ordered: list[str] = []
     for path in candidates:
@@ -145,9 +139,6 @@ def launch_arguments(chrome: str, profile: Path, login_url: str) -> list[str]:
     ]
 
 
-# ---------------------------------------------------------------------------
-# Cross-process guard: only one login window at a time
-# ---------------------------------------------------------------------------
 
 def _lock_path() -> Path:
     from .session import session_path
@@ -191,9 +182,6 @@ def _login_guard(timeout: float) -> Iterator[bool]:
             pass
 
 
-# ---------------------------------------------------------------------------
-# CDP
-# ---------------------------------------------------------------------------
 
 def _devtools_endpoint(profile: Path) -> tuple[int, str] | None:
     """The running profile's (port, websocket path), if it exposes one."""
@@ -317,7 +305,6 @@ async def capture_session(force: bool = False) -> tuple[object | None, str]:
     timeout = max(15, int(config.canvas_login_timeout))
     with _login_guard(timeout) as owns:
         if not owns:
-            # Another process is showing the window; wait for its result.
             deadline = time.monotonic() + timeout
             while time.monotonic() < deadline:
                 stored = load_session(force=True)
@@ -356,7 +343,6 @@ async def capture_session(force: bool = False) -> tuple[object | None, str]:
                 )
             captured = await _capture_loop(profile, host, timeout=timeout)
             if captured is None:
-                # Leave the window open: the student may still be signing in.
                 return (
                     None,
                     "The Chrome login window is open but no Canvas session was "

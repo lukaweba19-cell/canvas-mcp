@@ -81,7 +81,7 @@ def _install_tool_decorator_wrapper(mcp: FastMCP) -> None:
 
         return register
 
-    setattr(mcp, "tool", canvas_tool)  # noqa: B010
+    mcp.tool = canvas_tool
 
 
 def install_tool_result_contract(mcp: FastMCP) -> None:

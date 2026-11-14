@@ -60,7 +60,6 @@ def register_shared_file_tools(mcp: FastMCP) -> None:
         """
         course_id = await get_course_id(course_identifier)
 
-        # Get file metadata from Canvas API
         file_info = await make_canvas_request(
             "get",
             f"/courses/{course_id}/files/{file_id}"
@@ -77,7 +76,6 @@ def register_shared_file_tools(mcp: FastMCP) -> None:
         if not download_url:
             return "Error: No download URL available for this file. Check permissions."
 
-        # Determine save path with symlink resolution
         from pathlib import Path
         save_dir = Path(save_directory or tempfile.gettempdir()).resolve()
         if not save_dir.is_dir():
@@ -87,16 +85,6 @@ def register_shared_file_tools(mcp: FastMCP) -> None:
         if not save_path.is_relative_to(save_dir):
             return "Error: Invalid filename - path outside allowed directory"
 
-        # Create the destination exclusively. Canvas controls the filename, so a
-        # plain 'wb' open lets a course file named e.g. ".zshrc" silently truncate
-        # a real file in whatever directory was chosen. O_EXCL refuses an existing
-        # path (including a pre-planted symlink) and O_NOFOLLOW refuses to follow
-        # one, closing the swap race between the containment check and the write.
-        # O_NOFOLLOW is POSIX-only; on Windows the attribute does not exist at
-        # all, so naming it directly would raise AttributeError before os.open
-        # runs and break every local download there. O_EXCL alone still refuses
-        # an existing path, including a pre-planted symlink, which is the bulk
-        # of the protection.
         open_flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
         try:
             fd = os.open(save_path, open_flags, 0o600)
@@ -108,19 +96,13 @@ def register_shared_file_tools(mcp: FastMCP) -> None:
         except OSError as e:
             return f"Error creating destination file: {e}"
 
-        # Wrap the descriptor immediately so it is closed even if the network call
-        # below fails before the first write, and download by streaming to handle
-        # large files efficiently.
         try:
             total_bytes = 0
             with os.fdopen(fd, 'wb') as f:
-                # Session cookies only to Canvas; the storage redirect is unauthenticated.
                 async for chunk in iter_canvas_file_bytes(download_url):
                     f.write(chunk)
                     total_bytes += len(chunk)
         except Exception as e:
-            # We created this path, so a failed download leaves a truncated or
-            # empty file that a later reader could mistake for real content.
             try:
                 os.unlink(save_path)
             except OSError:
@@ -130,8 +112,6 @@ def register_shared_file_tools(mcp: FastMCP) -> None:
         size_str = format_file_size(total_bytes)
         course_display = await get_course_code(course_id) or course_identifier
 
-        # Filename is uploader-controlled (issue 239); the on-disk path uses
-        # the sanitized value, only the display is fenced.
         result = f"Downloaded: {fence_untrusted_inline(filename, 'file name')}\n"
         result += f"  Path: {save_path}\n"
         result += f"  Size: {size_str}\n"
@@ -173,7 +153,6 @@ def register_shared_file_tools(mcp: FastMCP) -> None:
 
         course_id = await get_course_id(course_identifier)
 
-        # Get file metadata from Canvas API
         file_info = await make_canvas_request(
             "get",
             f"/courses/{course_id}/files/{file_id}"
@@ -191,7 +170,6 @@ def register_shared_file_tools(mcp: FastMCP) -> None:
         if not download_url:
             return "Error: No download URL available for this file. Check permissions."
 
-        # Check reported file size before downloading
         if reported_size and reported_size > max_size_bytes:
             return (
                 f"Error: File '{filename}' is {format_file_size(reported_size)}, "
@@ -199,7 +177,6 @@ def register_shared_file_tools(mcp: FastMCP) -> None:
                 f"Use download_course_file instead for large files."
             )
 
-        # Download the file content into memory
         try:
             buffer = bytearray()
             async for chunk in iter_canvas_file_bytes(download_url):
@@ -242,7 +219,6 @@ def register_shared_file_tools(mcp: FastMCP) -> None:
             sort: Sort field: name, size, created_at, updated_at, content_type (default: updated_at)
             order: "asc" or "desc" (default: desc)
         """
-        # Validate sort and order parameters
         valid_sort_fields = {"name", "size", "created_at", "updated_at", "content_type"}
         if sort not in valid_sort_fields:
             return f"Invalid sort field: '{sort}'. Must be one of: {', '.join(sorted(valid_sort_fields))}"

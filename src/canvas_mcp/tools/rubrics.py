@@ -40,13 +40,9 @@ def preprocess_criteria_string(criteria_string: str) -> str:
     Returns:
         Cleaned criteria string ready for JSON parsing
     """
-    # Strip whitespace
     cleaned = criteria_string.strip()
 
-    # Handle cases where quotes might be escaped incorrectly
-    # This is a common issue with string serialization
     if cleaned.startswith('"{') and cleaned.endswith('}"'):
-        # Remove outer quotes and unescape inner quotes
         cleaned = cleaned[1:-1].replace('\\"', '"').replace('\\\\', '\\')
 
     return cleaned
@@ -64,23 +60,18 @@ def validate_rubric_criteria(criteria_json: str) -> dict[str, Any]:
     Raises:
         ValueError: If JSON is invalid or structure is incorrect
     """
-    # Preprocess the string to handle common issues
     cleaned_json = preprocess_criteria_string(criteria_json)
 
     try:
         criteria = json.loads(cleaned_json)
     except json.JSONDecodeError as e:
-        # Try alternative parsing methods if JSON fails
         try:
-            # Maybe it's a Python literal string representation
             criteria = ast.literal_eval(cleaned_json)
             if isinstance(criteria, dict):
-                # Successfully parsed as Python literal, continue with validation
                 pass
             else:
                 raise ValueError("Parsed result is not a dictionary")
         except (ValueError, SyntaxError):
-            # Both JSON and literal_eval failed, provide detailed error
             error_msg = f"Invalid JSON format: {str(e)}\n"
             error_msg += f"Original string length: {len(criteria_json)}\n"
             error_msg += f"Cleaned string length: {len(cleaned_json)}\n"
@@ -94,7 +85,6 @@ def validate_rubric_criteria(criteria_json: str) -> dict[str, Any]:
     if not isinstance(criteria, dict):
         raise ValueError("Criteria must be a JSON object (dictionary)")
 
-    # Validate each criterion
     for criterion_key, criterion_data in criteria.items():
         if not isinstance(criterion_data, dict):
             raise ValueError(f"Criterion {criterion_key} must be an object")
@@ -112,13 +102,10 @@ def validate_rubric_criteria(criteria_json: str) -> dict[str, Any]:
         except (ValueError, TypeError) as err:
             raise ValueError(f"Criterion {criterion_key} points must be a valid number") from err
 
-        # Validate ratings if present - handle both object and array formats
         if "ratings" in criterion_data:
             ratings = criterion_data["ratings"]
 
-            # Handle both object and array formats
             if isinstance(ratings, dict):
-                # Object format: {"1": {...}, "2": {...}}
                 for rating_key, rating_data in ratings.items():
                     if not isinstance(rating_data, dict):
                         raise ValueError(f"Rating {rating_key} in criterion {criterion_key} must be an object")
@@ -137,7 +124,6 @@ def validate_rubric_criteria(criteria_json: str) -> dict[str, Any]:
                         raise ValueError(f"Rating {rating_key} points must be a valid number") from err
 
             elif isinstance(ratings, list):
-                # Array format: [{"description": ..., "points": ...}, ...]
                 for i, rating_data in enumerate(ratings):
                     if not isinstance(rating_data, dict):
                         raise ValueError(f"Rating {i} in criterion {criterion_key} must be an object")
@@ -203,9 +189,6 @@ def validate_rubric_update_criteria(
                 f"criterion {criterion_id} description must be a string"
             )
 
-        # These Canvas flags affect scoring/range behavior but are not editable
-        # through this deliberately narrow tool. Carry them forward so a text
-        # or points edit cannot silently reset existing behavior.
         for field in ("criterion_use_range", "ignore_for_scoring"):
             if field in current_by_id[criterion_id]:
                 proposed[field] = current_by_id[criterion_id][field]
@@ -544,7 +527,6 @@ def format_rubric_response(response: dict[str, Any]) -> str:
     Returns:
         Formatted string representation of the rubric
     """
-    # Handle Canvas API's non-standard response format
     if "rubric" in response and "rubric_association" in response:
         rubric = response["rubric"]
         association = response["rubric_association"]
@@ -564,14 +546,12 @@ def format_rubric_response(response: dict[str, Any]) -> str:
             result += f"  Used for Grading: {'Yes' if association.get('use_for_grading', False) else 'No'}\n"
             result += f"  Purpose: {association.get('purpose', 'N/A')}\n"
 
-        # Show criteria count
         data = rubric.get('data', [])
         if data:
             result += f"\nCriteria: {len(data)} criterion defined\n"
 
         return result
 
-    # Handle standard rubric response
     else:
         result = "Rubric Operation Completed!\n\n"
         result += f"ID: {response.get('id', 'N/A')}\n"
@@ -645,21 +625,16 @@ def build_rubric_assessment_form_data(
     """
     form_data: dict[str, str] = {}
 
-    # Transform rubric_assessment object into Canvas's form-encoded format
     for criterion_id, assessment in rubric_assessment.items():
-        # Points are required
         if "points" in assessment:
             form_data[f"rubric_assessment[{criterion_id}][points]"] = str(assessment["points"])
 
-        # Rating ID is optional but recommended
         if "rating_id" in assessment:
             form_data[f"rubric_assessment[{criterion_id}][rating_id]"] = str(assessment["rating_id"])
 
-        # Comments are optional
         if "comments" in assessment:
             form_data[f"rubric_assessment[{criterion_id}][comments]"] = str(assessment["comments"])
 
-    # Add optional overall comment
     if comment:
         form_data["comment[text_comment]"] = comment
 
@@ -725,15 +700,11 @@ def build_rubric_create_form_data(
 
         ratings = criterion_data.get("ratings", [])
 
-        # Normalize to a list of dicts (criteria support both list and dict formats)
         if isinstance(ratings, dict):
-            # Dict-format ratings use arbitrary user-provided keys that Canvas does not
-            # recognise — only description/points/long_description matter.  Discard keys.
             ratings_list = list(ratings.values())
         else:
             ratings_list = list(ratings)
 
-        # Sort ratings highest → lowest so Canvas displays them correctly
         ratings_list = sorted(
             ratings_list,
             key=lambda r: float(r.get("points", 0)),
@@ -748,12 +719,6 @@ def build_rubric_create_form_data(
             if rating_long_desc:
                 form_data[f"{rprefix}[long_description]"] = str(rating_long_desc)
 
-    # Canvas needs a rubric_association, not just the rubric. Without one it
-    # creates the rubric row in the course context (so GET /courses/:id/rubrics
-    # returns it) but no association row, and the Canvas Rubrics UI lists
-    # rubrics via the course's *bookmarked* associations. The result is a rubric
-    # that is visible over the API and invisible in the interface, which is
-    # exactly what #180 reported.
     if assignment_id is not None:
         form_data["rubric_association[association_id]"] = str(assignment_id)
         form_data["rubric_association[association_type]"] = "Assignment"
@@ -793,7 +758,6 @@ def rubric_association_id(response: Any) -> Any | None:
     if isinstance(association, dict):
         return association.get("id") or None
 
-    # POST /courses/:id/rubric_associations returns the association itself.
     if response.get("association_type") or response.get("association_id"):
         return response.get("id") or None
 
@@ -826,10 +790,7 @@ def count_csv_rubrics(csv_content: str) -> int | None:
     names: set[str] = set()
     for row in reader:
         if not isinstance(row, dict):
-            # Defensive guard kept deliberately: typeshed says DictReader always
-            # yields dicts, so mypy sees this as dead, but a malformed csv module
-            # substitute would otherwise crash the loop.
-            continue  # type: ignore[unreachable]
+            continue
         raw_name = row.get(rubric_name_field)
         if isinstance(raw_name, str) and raw_name.strip():
             names.add(raw_name.strip())
@@ -910,7 +871,6 @@ def register_rubric_tools(mcp: FastMCP) -> None:
         course_id = await get_course_id(course_identifier)
         course_display = await get_course_code(course_id) or course_identifier
 
-        # Path 1: Look up by rubric_id (preferred when both provided)
         if rubric_id is not None:
             rubric_id_str = str(rubric_id)
 
@@ -929,8 +889,6 @@ def register_rubric_tools(mcp: FastMCP) -> None:
             read_only = response.get("read_only", False)
             data = response.get("data", [])
 
-            # Rubric title, criterion/rating descriptions are author-authored
-            # (issue 239).
             result = f"Rubric {fence_untrusted_inline(title, 'rubric title')} in Course {course_display}:\n\n"
             result += f"Rubric ID: {rubric_id}\n"
             result += f"Total Points: {points_possible}\n"
@@ -1000,7 +958,6 @@ def register_rubric_tools(mcp: FastMCP) -> None:
 
             return result
 
-        # Path 2: Look up via assignment_id
         assignment_id_str = str(assignment_id)
 
         response = await make_canvas_request(
@@ -1031,14 +988,12 @@ def register_rubric_tools(mcp: FastMCP) -> None:
             f"in Course {course_display}:\n\n"
         )
 
-        # Grading config (only available via assignment path)
         result += "Grading Config:\n"
         result += f"  Used for Grading: {'Yes' if use_rubric_for_grading else 'No'}\n"
         if rubric_settings:
             result += f"  Points Possible: {rubric_settings.get('points_possible', 'N/A')}\n"
         result += f"Number of Criteria: {len(rubric)}\n\n"
 
-        # Criteria and ratings
         result += "Criteria and Ratings:\n"
         result += "=" * 50 + "\n"
 
@@ -1092,7 +1047,6 @@ def register_rubric_tools(mcp: FastMCP) -> None:
         assignment_id_str = str(assignment_id)
         user_id_str = str(user_id)
 
-        # Get submission with rubric assessment
         response = await make_canvas_request(
             "get",
             f"/courses/{course_id}/assignments/{assignment_id_str}/submissions/{user_id_str}",
@@ -1102,14 +1056,10 @@ def register_rubric_tools(mcp: FastMCP) -> None:
         if "error" in response:
             return f"Error fetching submission rubric assessment: {response['error']}"
 
-        # Anonymization happens at the client layer (core/client.py) per
-        # ENABLE_DATA_ANONYMIZATION (#179)
 
-        # Check if submission has rubric assessment
         rubric_assessment = response.get("rubric_assessment")
 
         if not rubric_assessment:
-            # Get user and assignment names for better error message
             assignment_response = await make_canvas_request(
                 "get", f"/courses/{course_id}/assignments/{assignment_id_str}"
             )
@@ -1122,7 +1072,6 @@ def register_rubric_tools(mcp: FastMCP) -> None:
                 f"in course {course_display}."
             )
 
-        # Get assignment details for context
         assignment_response = await make_canvas_request(
             "get", f"/courses/{course_id}/assignments/{assignment_id_str}",
             params={"include[]": ["rubric"]}
@@ -1131,7 +1080,6 @@ def register_rubric_tools(mcp: FastMCP) -> None:
         assignment_name = assignment_response.get("name", "Unknown Assignment") if "error" not in assignment_response else "Unknown Assignment"
         rubric_data = assignment_response.get("rubric", []) if "error" not in assignment_response else []
 
-        # Format rubric assessment
         course_display = await get_course_code(course_id) or course_identifier
 
         result = (
@@ -1140,7 +1088,6 @@ def register_rubric_tools(mcp: FastMCP) -> None:
             f"in Course {course_display}:\n\n"
         )
 
-        # Submission details
         submitted_at = format_date(response.get("submitted_at"))
         graded_at = format_date(response.get("graded_at"))
         score = response.get("score", "Not graded")
@@ -1150,14 +1097,12 @@ def register_rubric_tools(mcp: FastMCP) -> None:
         result += f"  Graded: {graded_at}\n"
         result += f"  Score: {score}\n\n"
 
-        # Rubric assessment details
         result += "Rubric Assessment:\n"
         result += "=" * 30 + "\n"
 
         total_rubric_points = 0
 
         for criterion_id, assessment in rubric_assessment.items():
-            # Find criterion details from rubric data
             criterion_info = None
             for criterion in rubric_data:
                 if str(criterion.get("id")) == str(criterion_id):
@@ -1169,13 +1114,10 @@ def register_rubric_tools(mcp: FastMCP) -> None:
             comments = assessment.get("comments", "")
             rating_id = assessment.get("rating_id")
 
-            # Criterion/rating descriptions (author) and comments (grader/peer)
-            # are author-controlled (issue 239).
             result += f"\n{fence_untrusted_inline(criterion_description, 'rubric criterion description')}:\n"
             result += f"  Points Awarded: {points}\n"
 
             if rating_id and criterion_info:
-                # Find the rating description
                 for rating in criterion_info.get("ratings", []):
                     if str(rating.get("id")) == str(rating_id):
                         result += f"  Rating: {fence_untrusted_inline(rating.get('description', 'N/A'), 'rubric rating description')} ({rating.get('points', 0)} pts)\n"

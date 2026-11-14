@@ -30,13 +30,11 @@ PAYLOAD = b"%PDF-1.4\nsecret course notes\n"
 
 class _Handler(BaseHTTPRequestHandler):
     def _handle(self) -> None:
-        # Drain any request body first: an upload POST that is answered before
-        # its body is consumed makes the client see a broken connection.
         length = int(self.headers.get("Content-Length") or 0)
         if length:
             self.rfile.read(length)
-        self.server.requests.append((self.path, dict(self.headers)))  # type: ignore[attr-defined]
-        route = self.server.routes.get(self.path)  # type: ignore[attr-defined]
+        self.server.requests.append((self.path, dict(self.headers)))
+        route = self.server.routes.get(self.path)
         if route is None:
             self.send_error(404)
             return
@@ -48,8 +46,8 @@ class _Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    do_GET = _handle  # noqa: N815 - stdlib handler naming
-    do_POST = _handle  # noqa: N815
+    do_GET = _handle
+    do_POST = _handle
 
     def log_message(self, *args):
         pass
@@ -58,8 +56,8 @@ class _Handler(BaseHTTPRequestHandler):
 @contextmanager
 def _server(routes: dict[str, tuple[int, dict[str, str], bytes]]):
     server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
-    server.routes = routes  # type: ignore[attr-defined]
-    server.requests = []  # type: ignore[attr-defined]
+    server.routes = routes
+    server.requests = []
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
@@ -125,10 +123,10 @@ async def test_download_follows_storage_redirect_without_the_token(canvas_config
             body = await _collect(f"{canvas_base}/files/1")
 
             assert body == PAYLOAD
-            canvas_requests = dict(canvas.requests)  # type: ignore[attr-defined]
+            canvas_requests = dict(canvas.requests)
             assert "_canvas_session=student-session" in canvas_requests["/files/1"]["Cookie"]
             assert "Authorization" not in canvas_requests["/files/1"]
-            storage_requests = dict(storage.requests)  # type: ignore[attr-defined]
+            storage_requests = dict(storage.requests)
             assert "/blob?signature=abc" in storage_requests
             assert "Cookie" not in storage_requests["/blob?signature=abc"]
 
@@ -141,7 +139,7 @@ async def test_file_url_outside_canvas_is_fetched_unauthenticated(canvas_config)
             body = await _collect(f"{storage_base}/direct")
 
             assert body == PAYLOAD
-            received = dict(storage.requests)["/direct"]  # type: ignore[attr-defined]
+            received = dict(storage.requests)["/direct"]
             assert "Cookie" not in received
 
 
@@ -172,8 +170,7 @@ async def test_upload_confirmation_to_another_origin_is_refused(
             )
 
             assert "Refused to confirm" in result["error"]
-            # Nothing was sent to the origin the token must never reach.
-            assert storage.requests == []  # type: ignore[attr-defined]
+            assert storage.requests == []
 
 
 async def test_upload_confirmation_back_to_canvas_keeps_the_token(
@@ -200,5 +197,5 @@ async def test_upload_confirmation_back_to_canvas_keeps_the_token(
             )
 
             assert result["id"] == 7
-            confirmed = dict(canvas.requests)["/confirmed"]  # type: ignore[attr-defined]
+            confirmed = dict(canvas.requests)["/confirmed"]
             assert "_canvas_session=student-session" in confirmed["Cookie"]

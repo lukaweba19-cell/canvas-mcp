@@ -27,11 +27,6 @@ from ..core.write_confirmation import (
 )
 from .self_identity import _own_roles
 
-# Replacing a syllabus that already has content destroys the only copy Canvas
-# keeps -- syllabus_body carries no revision history, unlike a wiki page. So
-# that one case takes the same preview->token->confirm path as the delete
-# tools; writing into an empty syllabus, or appending, has nothing to lose and
-# stays a single call.
 _UPDATE_SYLLABUS_GUARD = ConfirmationGuard(
     nothing_done="The syllabus was not changed."
 )
@@ -62,7 +57,6 @@ class _MediaCollector(HTMLParser):
         attr = {k: (v or "") for k, v in attrs}
         self.items.append({
             "tag": tag,
-            # <object> uses data=, everything else src=.
             "src": attr.get("src") or attr.get("data") or "",
             "alt": attr.get("alt") or attr.get("title") or "",
         })
@@ -87,7 +81,7 @@ def extract_embedded_media(html_content: str) -> list[dict[str, str]]:
     try:
         collector.feed(html_content)
         collector.close()
-    except Exception:  # pragma: no cover - HTMLParser is lenient by design
+    except Exception:
         return collector.items
 
     seen: set[tuple[str, str]] = set()
@@ -131,12 +125,8 @@ def strip_html_tags(html_content: str) -> str:
 
     text = html_content
 
-    # Drop <script>/<style> blocks entirely so their JS/CSS contents don't
-    # leak into the plain-text output.
     text = re.sub(r'(?is)<(script|style)\b[^>]*>.*?</\1>', '', text)
 
-    # Normalize <br> and block-level boundaries to newlines so content across
-    # tag boundaries is separated instead of concatenated.
     text = re.sub(r'(?i)<\s*br\s*/?\s*>', '\n', text)
     text = re.sub(
         r'(?i)</\s*(?:p|div|h[1-6]|li|ul|ol|tr|table|thead|tbody|tfoot|'
@@ -144,19 +134,12 @@ def strip_html_tags(html_content: str) -> str:
         '\n',
         text,
     )
-    # Separate table cells within a row.
     text = re.sub(r'(?i)</\s*(?:td|th)\s*>', '\t', text)
 
-    # Remove all remaining tags. Use a space so inline tags don't join words.
     text = re.sub(r'<[^>]+>', ' ', text)
 
-    # Decode HTML entities (named, decimal, and hex) via the stdlib — covers
-    # smart quotes, dashes, accents, &nbsp;, etc. that Canvas content commonly
-    # uses, with no manual entity table to maintain.
     text = html.unescape(text)
 
-    # Collapse intra-line whitespace but preserve line breaks. \xa0 (decoded
-    # from &nbsp;) is normalized to a regular space.
     text = re.sub(r'[ \t\xa0]+', ' ', text)
     text = re.sub(r' *\n *', '\n', text)
     text = re.sub(r'\n{3,}', '\n\n', text)
@@ -185,15 +168,7 @@ def register_course_tools(mcp: FastMCP) -> None:
         }
 
         if not include_all:
-            # Scope to the user's *current* enrollments. enrollment_state="active"
-            # is Canvas's canonical "current" signal; the course state[] filter
-            # below cannot distinguish current from past at institutions that
-            # never flip finished courses to workflow_state="completed".
             params["enrollment_state"] = "active"
-            # Educators keep teacher-only scoping (unchanged behavior). Students
-            # and the "all" profile see every active enrollment, which is what a
-            # Shared tool should return — the old unconditional teacher filter
-            # returned nothing for students.
             if get_config().canvas_role == "educator":
                 params["enrollment_type"] = "teacher"
 
@@ -210,7 +185,6 @@ def register_course_tools(mcp: FastMCP) -> None:
         if not courses:
             return "No courses found."
 
-        # Refresh our caches with the course data
         for course in courses:
             course_id = str(course.get("id"))
             course_code = course.get("course_code")
@@ -225,13 +199,9 @@ def register_course_tools(mcp: FastMCP) -> None:
             name = course.get("name", "Unnamed course")
             code = course.get("course_code", "No code")
 
-            # Canvas already ships the caller's own enrollments[] on /courses
-            # (no include[] needed); dropping it used to force callers toward
-            # roster tools they have no permission for (issue #171).
             roles = _own_roles(course)
             role_line = f"Your role: {', '.join(roles)}\n" if roles else ""
 
-            # Emphasize code in the output
             courses_info.append(
                 f"Code: {code}\nName: {name}\nID: {course_id}\n{role_line}"
             )
@@ -253,7 +223,6 @@ def register_course_tools(mcp: FastMCP) -> None:
         if "error" in response:
             return f"Error fetching course details: {response['error']}"
 
-        # Update our caches with the course data
         if "id" in response and "course_code" in response:
             course_code_to_id_cache[response["course_code"]] = str(response["id"])
             id_to_course_code_cache[str(response["id"])] = response["course_code"]
@@ -269,16 +238,12 @@ def register_course_tools(mcp: FastMCP) -> None:
             f"Blueprint: {response.get('blueprint', False)}"
         ]
 
-        # Surface the caller's own role. Say so explicitly when there is none —
-        # silence reads as "unknown" and sends agents to roster tools they cannot
-        # use (issue #171).
         roles = _own_roles(response)
         if roles:
             details.append(f"Your role: {', '.join(roles)}")
         else:
             details.append("Your role: You have no enrollment in this course")
 
-        # Prefer to show course code in the output
         course_display = response.get("course_code", course_identifier)
         return f"Course Details for {course_display}:\n\n" + "\n".join(details)
 
@@ -301,7 +266,6 @@ def register_course_tools(mcp: FastMCP) -> None:
                 section. When exceeded, the content is truncated with an explicit
                 "[truncated...]" marker. Defaults to None (no truncation).
         """
-        # Validate inputs before any network I/O so bad arguments fail fast.
         fmt = (output_format or "text").lower()
         if fmt not in ("text", "html", "both"):
             return (
@@ -333,12 +297,9 @@ def register_course_tools(mcp: FastMCP) -> None:
                 return text[:max_chars] + f"\n\n...[truncated at {max_chars} characters]"
             return text
 
-        # Section headers only help disambiguate when both formats are present.
         labeled = fmt == "both"
         sections = [f"Syllabus for Course {course_display}:"]
 
-        # Syllabus bodies are course-authored free text (issue 239): fence them
-        # so embedded directives arrive marked as data, not instructions.
         if fmt in ("text", "both"):
             plain_text = _maybe_truncate(strip_html_tags(syllabus_body))
             sections.append(
@@ -373,14 +334,12 @@ def register_course_tools(mcp: FastMCP) -> None:
 
         overview_sections = []
 
-        # Get course details for context
         course_response = await make_canvas_request("get", f"/courses/{course_id}")
         if "error" in course_response:
             return f"Error fetching course: {course_response['error']}"
         course_name = course_response.get("name", "Unknown Course")
         overview_sections.append(f"Course: {course_name}")
 
-        # Get pages if requested
         if include_pages:
             pages = await fetch_all_paginated_results(f"/courses/{course_id}/pages", {"per_page": 100})
             if isinstance(pages, dict) and "error" in pages:
@@ -400,15 +359,12 @@ def register_course_tools(mcp: FastMCP) -> None:
 
                 if published_pages:
                     pages_summary.append("\nRecent Published Pages:")
-                    # Sort by updated_at and show first 5
                     sorted_pages = sorted(published_pages,
                                         key=lambda x: x.get("updated_at", ""),
                                         reverse=True)
                     for page in sorted_pages[:5]:
                         title = page.get("title", "Untitled")
                         updated = format_date(page.get("updated_at"))
-                        # Page titles are author-controlled where page editing
-                        # is open to students (issue 239).
                         pages_summary.append(
                             f"    {fence_untrusted(title, 'page title')} "
                             f"(Updated: {updated})"
@@ -416,7 +372,6 @@ def register_course_tools(mcp: FastMCP) -> None:
 
                 overview_sections.append("\n".join(pages_summary))
 
-        # Get modules if requested
         if include_modules:
             modules = await fetch_all_paginated_results(f"/courses/{course_id}/modules", {"per_page": 100})
             if isinstance(modules, dict) and "error" in modules:
@@ -427,11 +382,10 @@ def register_course_tools(mcp: FastMCP) -> None:
                     f"  Total Modules: {len(modules)}"
                 ]
 
-                # Count module items by type across all modules
                 item_type_counts: dict[str, int] = {}
                 total_items = 0
 
-                for module in modules[:10]:  # Limit to first 10 modules to avoid too many API calls
+                for module in modules[:10]:
                     module_id = module.get("id")
                     if module_id:
                         items = await fetch_all_paginated_results(
@@ -452,22 +406,18 @@ def register_course_tools(mcp: FastMCP) -> None:
                     for item_type, count in sorted(item_type_counts.items()):
                         modules_summary.append(f"    {item_type}: {count}")
 
-                # Show module structure for first few modules
                 if modules:
                     modules_summary.append("\nModule Structure (first 3):")
                     for module in modules[:3]:
                         name = module.get("name", "Unnamed")
                         state = module.get("state", "unknown")
-                        # Module names are instructor-authored (issue 239).
                         modules_summary.append(
                             f"    {fence_untrusted_inline(name, 'module name')} (Status: {state})"
                         )
 
                 overview_sections.append("\n".join(modules_summary))
 
-        # Get syllabus content if requested
         if include_syllabus:
-            # Fetch the course details with syllabus_body included
             course_with_syllabus = await make_canvas_request(
                 "get",
                 f"/courses/{course_id}",
@@ -478,10 +428,8 @@ def register_course_tools(mcp: FastMCP) -> None:
                 syllabus_body = course_with_syllabus.get('syllabus_body', '')
 
                 if syllabus_body:
-                    # Clean the HTML content
                     clean_syllabus = strip_html_tags(syllabus_body)
 
-                    # For overview, limit to first 1000 characters
                     if len(clean_syllabus) > 1000:
                         clean_syllabus = clean_syllabus[:1000] + "..."
 
@@ -490,7 +438,6 @@ def register_course_tools(mcp: FastMCP) -> None:
                     )
                     syllabus_summary = [
                         "\nSyllabus Content:",
-                        # Course-authored free text (issue 239): fence it.
                         fence_untrusted(indented, "course syllabus (preview)")
                     ]
 
@@ -499,7 +446,6 @@ def register_course_tools(mcp: FastMCP) -> None:
                     overview_sections.append("\nSyllabus Content: No syllabus content found")
             else:
                 return f"Error fetching syllabus: {course_with_syllabus['error']}"
-        # Try to get the course code for display
         course_display = await get_course_code(course_id) or course_identifier
         result = f"Content Overview for Course {course_display}:" + "\n".join(overview_sections)
 
@@ -556,8 +502,6 @@ def register_shared_content_tools(mcp: FastMCP) -> None:
 
             front_page_indicator = " (Front Page)" if is_front_page else ""
 
-            # Page titles are author-controlled where page editing is open to
-            # students (issue 239) — fenced in listings too.
             pages_info.append(
                 f"URL: {url}\n"
                 f"Title{front_page_indicator}:\n{fence_untrusted(title, 'page title')}\n"
@@ -600,11 +544,6 @@ def register_shared_content_tools(mcp: FastMCP) -> None:
         course_display = await get_course_code(course_id) or course_identifier
         status = "Published" if published else "Unpublished"
 
-        # Title, body, AND the media inventory derived from the body are all
-        # page-author-controlled (issue 239) — every one of them goes inside
-        # a single fence; only our own framing stays outside. The inventory is
-        # computed from the raw body BEFORE fencing, so spoof-neutralization
-        # can never alter what it sees.
         untrusted = (
             f"Title: {title}\n\n{body}"
             + format_media_inventory(extract_embedded_media(body))
@@ -646,20 +585,10 @@ def register_shared_content_tools(mcp: FastMCP) -> None:
         locked_for_user = response.get("locked_for_user", False)
         editing_roles = response.get("editing_roles", "")
 
-        # Handle last edited by user info
         last_edited_by = response.get("last_edited_by", {})
         editor_name_raw = last_edited_by.get("display_name", "Unknown") if last_edited_by else "Unknown"
-        # Editor display name is author-controlled where names are editable (issue 239).
         editor_name = fence_untrusted_inline(editor_name_raw, "editor display name")
 
-        # Build a TEXT PREVIEW of the body. Both lossy steps below must announce
-        # themselves: a silent strip made 4 embedded videos vanish from a real
-        # course page with no trace in the output (issue #233), and a bare "..."
-        # does not tell the reader a fixed budget was hit.
-        #
-        # strip_html_tags (not a bare `<[^>]+>` regex) because it also drops
-        # <script>/<style> CONTENTS. The naive form deletes only the tags, which
-        # promotes script text into what reads as page prose.
         media = extract_embedded_media(body)
         if body:
             body_clean = strip_html_tags(body).strip()
@@ -690,9 +619,6 @@ def register_shared_content_tools(mcp: FastMCP) -> None:
         result += f"Last Edited By: {editor_name}\n"
         result += f"Editing Roles: {editing_roles or 'Not specified'}\n"
 
-        # Title, text preview, and media src URLs are all page-author-
-        # controlled (issue 239): one fence around the lot, our framing
-        # outside it.
         untrusted = f"Title: {title}\n\nContent Preview (text only, truncated):\n{body_clean}"
         if media:
             untrusted += (
@@ -732,9 +658,7 @@ def register_shared_content_tools(mcp: FastMCP) -> None:
                 title, "front page title"
             )
 
-        # Try to get the course code for display
         course_display = await get_course_code(course_id) or course_identifier
-        # Title and body are both page-author-controlled (issue 239).
         return (
             f"Front Page for Course {course_display} (Updated: {updated_at}):\n\n"
             + fence_untrusted(f"Title: {title}\n\n{body}", "front page title and body")
@@ -768,7 +692,6 @@ def register_shared_content_tools(mcp: FastMCP) -> None:
         if not items:
             return f"No items found in module {module_id}."
 
-        # Get module details for context
         module_response = await make_canvas_request(
             "get", f"/courses/{course_id}/modules/{module_id}"
         )
@@ -778,7 +701,6 @@ def register_shared_content_tools(mcp: FastMCP) -> None:
             module_name = module_response.get("name", "Unknown Module")
 
         course_display = await get_course_code(course_id) or course_identifier
-        # Module name and item titles are instructor-authored (issue 239).
         result = (
             f"Module Items for {fence_untrusted_inline(module_name, 'module name')} "
             f"in Course {course_display}:\n\n"

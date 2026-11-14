@@ -8,7 +8,6 @@ class WriteOutcome(Enum):
     MAY_HAVE_WRITTEN = 'may_have_written'
 
 
-# Existing messaging policy: timeout, conflict, rate limit and 5xx are uncertain.
 NO_WRITE_STATUSES = frozenset({400, 401, 403, 404, 422})
 
 

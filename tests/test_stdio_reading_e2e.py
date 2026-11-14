@@ -34,7 +34,6 @@ DECK = build_pptx(
     [{"text": "Greedy choice property", "notes": "Proof by exchange argument"}]
 )
 
-# A lecture deck Canvas stored as PDF: landscape pages, so it reads per slide.
 SLIDE_PDF = build_slide_pdf(
     ["Graphs and trees", "Dijkstra relaxes edges", "Proof by exchange argument"]
 )
@@ -62,9 +61,9 @@ class _CanvasStub(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
-    def do_GET(self):  # noqa: N802 - stdlib handler naming
+    def do_GET(self):
         path = self.path.split("?", 1)[0]
-        base = self.server.blob_base  # type: ignore[attr-defined]
+        base = self.server.blob_base
         blobs = {"/blob/501": PDF, "/blob/502": DECK, "/blob/503": SLIDE_PDF}
         if path in blobs:
             self._blob(blobs[path])
@@ -93,7 +92,7 @@ class _CanvasStub(BaseHTTPRequestHandler):
             return
         self._json({})
 
-    def log_message(self, *args):  # keep pytest output clean
+    def log_message(self, *args):
         pass
 
 
@@ -101,7 +100,7 @@ class _CanvasStub(BaseHTTPRequestHandler):
 def canvas_stub():
     server = ThreadingHTTPServer(("127.0.0.1", 0), _CanvasStub)
     port = server.server_address[1]
-    server.blob_base = f"http://127.0.0.1:{port}"  # type: ignore[attr-defined]
+    server.blob_base = f"http://127.0.0.1:{port}"
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
@@ -140,8 +139,6 @@ async def test_real_stdio_server_reads_pdf_and_pptx(tmp_path, canvas_stub):
     )
     params = StdioServerParameters(
         command="uv",
-        # HTTP is the default transport now; this test is specifically the
-        # stdio path, so it must ask for it explicitly.
         args=["run", "canvas-mcp-server", "--transport", "stdio"],
         env=env,
         cwd=str(ROOT),
@@ -182,7 +179,6 @@ async def test_real_stdio_server_reads_pdf_and_pptx(tmp_path, canvas_stub):
             assert "Sections:" in index
             assert "Depth first search explores one branch fully." not in index
 
-            # The same server reads a PDF slide deck slide by slide.
             deck = text_of(
                 await session.call_tool(
                     "read_course_material",

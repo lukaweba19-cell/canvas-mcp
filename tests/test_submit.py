@@ -78,7 +78,6 @@ async def test_changing_the_draft_voids_the_token(canvas_routes, mcp):
         submission_type="online_text_entry", from_draft=True,
     )
 
-    # The student edits the file between preview and confirmation.
     student_store.save_draft("225", "42", "Different text they never saw", title="Essay 1")
     result = await call(
         mcp, "submit_assignment", course_identifier=225, assignment_id=42,

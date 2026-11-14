@@ -94,7 +94,6 @@ def test_draft_is_found_by_assignment_id_without_a_title():
     assert found is not None
     assert found["content"].strip() == "body from disk"
 
-    # A miss returns nothing and creates nothing: one folder, no strays.
     assert student_store.read_draft("225", "999") is None
     folders = [path.name for path in student_store.course_dir("225").iterdir()]
     assert folders == ["42-essay-1"]

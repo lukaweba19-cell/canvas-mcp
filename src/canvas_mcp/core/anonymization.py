@@ -10,15 +10,9 @@ import hashlib
 import re
 from typing import Any
 
-# Global anonymization mapping cache
 _anonymization_cache: dict[str, str] = {}
 
-# --------------------------------------------------------------------------
-# Field policy for the recursive identity scrubber (issue #166)
-# --------------------------------------------------------------------------
 
-#: Person-name fields that are unambiguous: whenever one of these keys is
-#: present it holds a human's name/handle, never a file or object label.
 STRICT_IDENTITY_FIELDS = frozenset({
     'short_name',
     'sortable_name',
@@ -33,11 +27,6 @@ STRICT_IDENTITY_FIELDS = frozenset({
     'login_id',
 })
 
-#: Keys whose pseudonym must be rendered as an email address rather than a bare
-#: ``Student_<hash>``. Canvas returns the caller's address under several names
-#: (``/users/self/profile`` alone can carry ``primary_email``,
-#: ``unconfirmed_email`` and ``contact_info``), and a downstream consumer that
-#: parses these as addresses would choke on a bare pseudonym.
 EMAIL_SHAPED_FIELDS = frozenset({
     'email',
     'primary_email',
@@ -45,16 +34,6 @@ EMAIL_SHAPED_FIELDS = frozenset({
     'contact_info',
 })
 
-#: Name fields that are ambiguous — Canvas uses them for courses, groups,
-#: modules, pages and file attachments as well as for people. These are only
-#: rewritten when the containing dict carries a corroborating user signal
-#: (see ``USER_SIGNAL_FIELDS`` / ``USER_CONTAINER_KEYS`` / user-ish id keys).
-#:
-#: ``full_name`` is deliberately ambiguous rather than strict: it is exactly the
-#: field the ``free_text`` endpoint tier preserves (a conversation participant's
-#: name in the caller's own inbox), while on a user profile the same key is PII
-#: and gets pseudonymised. ``unique_id`` is ambiguous because Canvas reuses it
-#: on non-person objects (LTI tools, outcome imports) as an opaque key.
 AMBIGUOUS_IDENTITY_FIELDS = frozenset({
     'name',
     'display_name',
@@ -62,14 +41,8 @@ AMBIGUOUS_IDENTITY_FIELDS = frozenset({
     'unique_id',
 })
 
-#: All identity fields, for callers that just want the union.
 IDENTITY_FIELDS = STRICT_IDENTITY_FIELDS | AMBIGUOUS_IDENTITY_FIELDS
 
-#: Fields that carry direct identifiers / imagery and are nulled outright.
-#: ``pronouns`` and ``pronunciation`` live here rather than in IDENTITY_FIELDS:
-#: replacing a pronoun set or a name-pronunciation guide with a
-#: ``Student_<hash>`` pseudonym would be nonsense, and a pronunciation string
-#: reconstructs the name it describes. Dropping the value is correct.
 NULL_FIELDS = frozenset({
     'sis_user_id',
     'integration_id',
@@ -81,12 +54,6 @@ NULL_FIELDS = frozenset({
     'pronunciation',
 })
 
-#: Profile fields nulled only on records that look like a person. Courses and
-#: terms also carry ``time_zone`` (and could carry ``locale``), where the value
-#: is institutional, not personal — nulling it there would be over-reach.
-#: ``address`` is container-scoped for the same reason: on a
-#: ``communication_channels[]`` entry it is the student's email or phone, while
-#: on a calendar event or an account it is a street address of a building.
 USER_ONLY_NULL_FIELDS = frozenset({
     'time_zone',
     'locale',
@@ -105,13 +72,8 @@ def _is_avatar_field(key_lower: str) -> bool:
         key_lower.endswith('url') or key_lower.endswith('path')
     )
 
-#: Keys searched, in order, for the id that a record's identity fields are
-#: keyed to. ``id`` is only used when the record itself looks like a user
-#: (otherwise it is an enrollment/comment/submission id and keying to it would
-#: mis-attribute the pseudonym).
 USER_ID_KEYS = ('user_id', 'author_id', 'assessor_id', 'grader_id')
 
-#: Presence of any of these keys corroborates "this dict describes a person".
 USER_SIGNAL_FIELDS = frozenset({
     'sortable_name',
     'short_name',
@@ -124,20 +86,12 @@ USER_SIGNAL_FIELDS = frozenset({
     'enrollments',
 })
 
-#: Keys that positively identify a record as NOT a person. Course objects also
-#: carry an ``enrollments`` list, which would otherwise corroborate them as a
-#: user and get the course title rewritten as a student pseudonym.
 NON_USER_MARKER_FIELDS = frozenset({
     'course_code',
     'sis_course_id',
     'enrollment_term_id',
 })
 
-#: Dict keys whose *value* is by convention a user record. Children reached
-#: through one of these inherit user context, so their ambiguous name fields and
-#: user-only null fields apply without needing their own corroborating signal.
-#: ``communication_channels`` / ``pseudonyms`` are the ``/users/self/profile``
-#: sub-objects that hold the caller's addresses and login handles.
 USER_CONTAINER_KEYS = frozenset({
     'user',
     'author',
@@ -152,10 +106,6 @@ USER_CONTAINER_KEYS = frozenset({
     'pseudonyms',
 })
 
-#: Free-text fields that get PII regex scrubbing wherever they are found.
-#: ``last_message`` / ``last_authored_message`` are the conversation-list
-#: previews: Canvas inlines the first ~255 characters of the message body there,
-#: so they carry exactly the addresses and phone numbers ``body`` does.
 FREE_TEXT_FIELDS = frozenset({
     'message',
     'comment',
@@ -165,9 +115,6 @@ FREE_TEXT_FIELDS = frozenset({
     'last_authored_message',
 })
 
-#: data_type values the router knows about. An explicit value outside this set
-#: (e.g. the legacy "test_endpoint" / "general") falls back to duck-typing;
-#: an explicit value *inside* it suppresses duck-typing entirely.
 KNOWN_DATA_TYPES = frozenset({'users', 'discussions', 'submissions', 'assignments'})
 
 _EMAIL_RE = re.compile(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b')
@@ -197,18 +144,14 @@ def generate_anonymous_id(real_id: str | int, prefix: str = "Student") -> str:
     """
     real_id_str = str(real_id)
 
-    # Check cache first
     if real_id_str in _anonymization_cache:
         return _anonymization_cache[real_id_str]
 
-    # Generate consistent hash-based ID
     hash_object = hashlib.sha256(real_id_str.encode())
     hash_hex = hash_object.hexdigest()
 
-    # Use first 8 characters for readability
     anonymous_id = f"{prefix}_{hash_hex[:8]}"
 
-    # Cache the mapping
     _anonymization_cache[real_id_str] = anonymous_id
 
     return anonymous_id
@@ -327,8 +270,6 @@ def scrub_identity(
             scrubbed[key] = _pseudonymise_field(key_lower, value, anonymous_id)
             continue
 
-        # Canvas sometimes returns a bare name string where a user object is
-        # expected (e.g. "author": "Bob Smith") — that is an identity value.
         if scrub_display_names and key_lower in USER_CONTAINER_KEYS and isinstance(value, str):
             scrubbed[key] = _pseudonymise_field('name', value, anonymous_id)
             continue

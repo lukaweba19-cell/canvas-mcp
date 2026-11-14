@@ -1,10 +1,8 @@
-# Secrets
 .env
 .env.*
 !.env.example
 *.pem
 
-# Python
 __pycache__/
 *.py[cod]
 .venv/
@@ -16,11 +14,8 @@ dist/
 .ruff_cache/
 .mypy_cache/
 
-# Node
 node_modules/
 
-# Local student workspace (notes, drafts, extracted course material)
 .canvas-student/
 
-# Temporary clean-checkout used for verification
 .verify-clean/

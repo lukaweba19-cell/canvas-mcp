@@ -51,8 +51,6 @@ async def test_image_only_pdf_names_reason_and_fix_everywhere(
     payload = build_image_only_pdf([(jpeg, width, height)])
     _route_file(files, monkeypatch, 411, "scan.pdf", payload)
 
-    # The map can only name the reason once the file has been looked at; after
-    # the read it must carry the same reason and fix as the tool result.
     read = await call(mcp, "read_course_material", course_identifier=231, file_id=411)
     assert "Status: NOT readable — image-only" in read
     assert "ask for a clearer scan" in read

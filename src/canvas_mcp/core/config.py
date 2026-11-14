@@ -8,14 +8,11 @@ from dotenv import load_dotenv
 
 from .logging import log_error, log_info, log_warning
 
-# Load environment variables from .env file
 load_dotenv()
 
 _INVALID_INT_ENV_VARS: dict[str, str] = {}
 _INVALID_FLOAT_ENV_VARS: dict[str, str] = {}
 
-# Canonical names of the student write tools that can be enabled. Quiz-taking is
-# deliberately absent: it is an academic-integrity decision of its own.
 STUDENT_WRITE_TOOL_NAMES = frozenset({
     "submit_assignment",
     "comment_on_my_submission",
@@ -61,16 +58,9 @@ def _normalize_canvas_url(raw: str) -> str:
         return ""
 
     parsed = urlparse(url)
-    # Without a scheme, urlparse puts the host in ``path`` and leaves
-    # ``netloc`` empty — we can't reliably rebuild it, so leave it for the
-    # validator to warn about.
     if not parsed.scheme or not parsed.netloc:
         return url
 
-    # Preserve an existing ``/api/v<N>`` version segment (truncating any extra
-    # path after it), matching only at a segment boundary so a real version
-    # like ``/api/v2`` is kept rather than rewritten. When the path carries no
-    # version segment, append the canonical ``/api/v1``.
     version = re.search(r"/api/v\d+(?=/|$)", parsed.path)
     path = parsed.path[: version.end()] if version else "/api/v1"
     return urlunparse(parsed._replace(path=path, params="", query="", fragment=""))
@@ -118,8 +108,6 @@ def validate_canvas_url_scheme() -> bool:
     config = get_config()
     parsed = urlparse(config.canvas_api_url)
     if not parsed.scheme or parsed.scheme == "https" or not parsed.netloc:
-        # Missing scheme / missing host are reported separately by
-        # validate_config(); this function only owns the cleartext case.
         return True
     if parsed.scheme != "http":
         return True
@@ -173,21 +161,14 @@ class Config:
     """Configuration class for Canvas MCP server."""
 
     def __init__(self) -> None:
-        # Required configuration. Authentication is a browser session captured
-        # from Chrome, not an API token (Canvas disables student tokens at many
-        # schools).
         self.canvas_session_file = os.getenv("CANVAS_SESSION_FILE", "").strip()
         self.canvas_chrome_profile = os.getenv("CANVAS_CHROME_PROFILE", "").strip()
         self.canvas_chrome_path = os.getenv("CANVAS_CHROME_PATH", "").strip()
         self.canvas_login_timeout = _int_env("CANVAS_LOGIN_TIMEOUT", 180)
         self.canvas_auth_no_browser = _bool_env("CANVAS_AUTH_NO_BROWSER", False)
-        # Keep the configured (pre-normalization) value so validate_config()
-        # can report the normalization delta from the same read that produced
-        # canvas_api_url. Whitespace-trimmed, matching the normalizer's input.
         self.canvas_api_url_configured = os.getenv("CANVAS_API_URL", "").strip()
         self.canvas_api_url = _normalize_canvas_url(self.canvas_api_url_configured)
 
-        # Optional configuration with defaults
         self.mcp_server_name = os.getenv("MCP_SERVER_NAME", "canvas-api")
         self.debug = _bool_env("DEBUG", False)
         self.api_timeout = _int_env("API_TIMEOUT", 30)
@@ -195,35 +176,24 @@ class Config:
         self.max_concurrent_requests = _int_env("MAX_CONCURRENT_REQUESTS", 10)
         self.read_file_max_size_mb = _float_env("READ_FILE_MAX_SIZE_MB", 100.0)
 
-        # Local student workspace: extracted material, study guides, notes,
-        # drafts and the work journal. Empty means ~/.canvas-mcp/student.
         self.student_dir = os.getenv("CANVAS_STUDENT_DIR", "").strip()
 
-        # Development configuration
         self.log_level = os.getenv("LOG_LEVEL", "INFO").upper()
         self.log_api_requests = _bool_env("LOG_API_REQUESTS", False)
 
-        # Privacy and security configuration
         self.enable_data_anonymization = _bool_env("ENABLE_DATA_ANONYMIZATION", True)
         self.anonymization_debug = _bool_env("ANONYMIZATION_DEBUG", False)
         self.log_redact_pii = _bool_env("LOG_REDACT_PII", True)
 
-        # Audit logging configuration
         self.log_access_events = _bool_env("LOG_ACCESS_EVENTS", False)
         self.log_execution_events = _bool_env("LOG_EXECUTION_EVENTS", False)
         self.audit_log_dir = os.getenv("AUDIT_LOG_DIR", "")
 
-        # Optional metadata        # Optional metadata
         self.institution_name = os.getenv("INSTITUTION_NAME", "")
         self.timezone = os.getenv("TIMEZONE", "UTC")
 
-        # Role-based tool filtering
         self.canvas_role = os.getenv("CANVAS_ROLE", "student").lower()
 
-        # --- Student write tools (#170) ---
-        # Operator ceiling for student write tools. This build is student-only,
-        # so all three are enabled by default; an empty value disables them all.
-        # Accepts comma- and/or space-separated tool names.
         self.student_write_tools = frozenset(
             name.strip()
             for name in os.getenv(
@@ -232,28 +202,16 @@ class Config:
             ).replace(",", " ").split()
             if name.strip()
         )
-        # Per-course instructor policy. Can further restrict (never expand) the
-        # operator ceiling above.
         self.course_agent_policy_enabled = _bool_env("COURSE_AGENT_POLICY_ENABLED", True)
-        # Posture when a course states no policy. An instructor can still block
-        # agent writes by putting "agent_writes: deny" in the syllabus.
         self.course_agent_policy_default = os.getenv(
             "COURSE_AGENT_POLICY_DEFAULT", "allow"
         ).strip().lower()
-        # Denials cache longer than grants. A stale grant is a revocation window on
-        # an attempt-consuming action, so it is deliberately short.
         self.course_agent_policy_allow_ttl = _int_env("COURSE_AGENT_POLICY_ALLOW_TTL", 30)
         self.course_agent_policy_deny_ttl = _int_env("COURSE_AGENT_POLICY_DENY_TTL", 300)
 
-        # --- Quiz taking (separate from reading) ---
-        # Reading quizzes is always available. Starting, answering and
-        # submitting an attempt consumes one of the student's attempts and
-        # produces graded work, so it is an explicit opt-in, independent of
-        # STUDENT_WRITE_TOOLS and of every read tool.
         self.quiz_taking = _bool_env("CANVAS_ENABLE_QUIZ_TAKING", False)
 
 
-# Global configuration instance
 _config: Config | None = None
 
 
@@ -310,10 +268,6 @@ def validate_config() -> bool:
         log_error("Please set CANVAS_API_URL in your .env file")
         return False
 
-    # Diagnose a CANVAS_API_URL that can't reach Canvas. The triple-slash case
-    # (e.g. 'https:///host') is the subtle one: it has a scheme but an empty
-    # netloc, so the normalizer leaves it untouched. Report the specific defect
-    # rather than a one-size-fits-all message.
     parsed_url = urlparse(config.canvas_api_url)
     if parsed_url.scheme not in ("http", "https"):
         log_warning(
@@ -347,8 +301,6 @@ def validate_config() -> bool:
         )
         config.canvas_role = "student"
 
-    # Student write policy: an unrecognized posture must fail closed, not fall
-    # through to something permissive.
     valid_postures = ("allow", "deny")
     if config.course_agent_policy_default not in valid_postures:
         log_warning(

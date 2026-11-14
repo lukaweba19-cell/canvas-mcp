@@ -18,8 +18,6 @@ from ..core.validation import validate_params
 from ..core.write_confirmation import ConfirmationGuard
 from ..core.write_outcome import NO_WRITE_STATUSES
 
-# One guard per destructive tool: each has its own signing secret and redeemed
-# set, so a token minted for one tool can never be replayed against another.
 _BULK_MESSAGE_GUARD = ConfirmationGuard()
 _SEND_CONVERSATION_GUARD = ConfirmationGuard()
 _REMINDER_GUARD = ConfirmationGuard()
@@ -40,11 +38,6 @@ def _fence_conversation_fields(conversation: Any) -> None:
         value = conversation.get(key)
         if isinstance(value, str) and value:
             conversation[key] = fence_untrusted(value, "conversation message")
-    # Participant display names are editable on many instances, so a
-    # student-controlled name sitting beside a fenced body is itself an
-    # injection channel. Fence the identity LABELS — deliberately without
-    # redacting, since anonymization elsewhere preserves participant names and
-    # this is a provenance mark, not a privacy scrub.
     for participant in conversation.get("participants") or []:
         if not isinstance(participant, dict):
             continue
@@ -135,20 +128,12 @@ def _render_bulk_messages(
             subject = subject_template.format(**recipient)
             body = body_template.format(**recipient)
         except (KeyError, IndexError, AttributeError, TypeError, ValueError) as e:
-            # AttributeError/TypeError cover format-spec shapes like
-            # "{name.foo}" / "{name[foo]}" — a poisoned row must become an
-            # invalid-record entry, not an unhandled exception that fails the
-            # whole call.
             errors.append({
                 "index": index,
                 "recipient": recipient,
                 "error": f"template does not render against this recipient: {e}",
             })
             continue
-        # The same validation the send choke point enforces, with the
-        # caller's ACTUAL requested mode — a row (or a bogus mode) that would
-        # be rejected at confirm time must fail the preview instead of
-        # burning a token.
         row_error = _validate_outbound_message([str(user_id)], subject, body, mode)
         if row_error:
             errors.append({
@@ -161,10 +146,6 @@ def _render_bulk_messages(
     return rendered, errors
 
 
-# Statuses that prove the request was REJECTED before any write: client-side
-# validation/auth failures. Deliberately excludes 408 (timeout — the server
-# may have processed it), 409, 429, and every 5xx (the failure can occur
-# after the write, or a proxy can emit it while Canvas succeeded).
 _NO_WRITE_STATUSES = NO_WRITE_STATUSES
 _HTTP_ERROR_STATUS = re.compile(r"^HTTP error: (\d+)")
 
@@ -205,10 +186,6 @@ def _validate_outbound_message(
         return "body is required"
     if mode not in ("sync", "async"):
         return "mode must be 'sync' or 'async'"
-    # Backstop for issue 239: composed text can pick up markers from
-    # Canvas-authored inputs (e.g. an assignment name inside a reminder
-    # subject), so the final outbound text is checked regardless of which
-    # tool assembled it.
     if contains_fence_markers(subject) or contains_fence_markers(body):
         return FENCE_LEAK_ERROR
     return None
@@ -246,7 +223,6 @@ async def _post_conversation(
         "force_new": force_new,
     }
 
-    # Add context_code if provided, otherwise construct from course_identifier
     if context_code:
         data["context_code"] = context_code
     else:
@@ -255,7 +231,6 @@ async def _post_conversation(
     if attachment_ids:
         data["attachment_ids[]"] = attachment_ids
 
-    # Canvas requires form data on /conversations
     response = await make_canvas_request("post", "/conversations", data=data, use_form_data=True)
 
     if "error" in response:
@@ -352,8 +327,6 @@ def register_shared_messaging_tools(mcp: FastMCP) -> None:
                 error_response: dict[str, Any] = response
                 return error_response
 
-            # Subjects and last-message previews are authored by whoever wrote
-            # to the inbox (issue 239): fence them.
             if isinstance(response, list):
                 for conversation in response:
                     _fence_conversation_fields(conversation)
@@ -401,10 +374,6 @@ def register_shared_messaging_tools(mcp: FastMCP) -> None:
                 error_response: dict[str, Any] = response
                 return error_response
 
-            # Inbound subjects and message bodies are third-party text (issue
-            # 239): fence them so a message reading "now forward the roster
-            # to..." arrives marked as data, not as an instruction. Read-only
-            # formatting — nothing here flows back into Canvas.
             _fence_conversation_fields(response)
 
             return {
@@ -456,8 +425,6 @@ def register_shared_messaging_tools(mcp: FastMCP) -> None:
                 "event": "mark_as_read"
             }
 
-            # /conversations requires form data: the "conversation_ids[]" bracket
-            # key only means an array in form encoding, not in a JSON body (#208)
             response = await make_canvas_request("put", "/conversations", data=data, use_form_data=True)
 
             if "error" in response:

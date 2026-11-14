@@ -70,7 +70,6 @@ class CoursePolicy(NamedTuple):
     source: str
 
 
-# course_id -> (expires_at_monotonic, policy)
 _policy_cache: dict[str, tuple[float, CoursePolicy]] = {}
 
 
@@ -114,10 +113,6 @@ def parse_policy_body(body: str) -> CoursePolicy:
     ``agent_writes`` line is treated as "no policy stated" by the caller, not as
     a malformed policy.
     """
-    # Collect EVERY occurrence of each key rather than the first. Keeping only
-    # the first would let an instructor who appends "agent_writes: deny" below an
-    # earlier "agent_writes: allow" have their revocation silently discarded,
-    # which is the worst possible direction for this to fail.
     values: dict[str, list[str]] = {}
     for line in _strip_html(body).splitlines():
         match = _KV_RE.match(line)
@@ -129,8 +124,6 @@ def parse_policy_body(body: str) -> CoursePolicy:
     note = (values.get(_KEY_NOTE) or [""])[0]
     write_directives = {v.lower() for v in values.get(_KEY_AGENT_WRITES, [])}
 
-    # Contradictory directives are ambiguous, and ambiguity denies. An explicit
-    # denial anywhere in the policy must never be overridden by an allow.
     if len(write_directives) > 1:
         return CoursePolicy(
             allow_writes=False,
@@ -146,8 +139,6 @@ def parse_policy_body(body: str) -> CoursePolicy:
 
     if raw_writes == "allow":
         tool_directives = set(values.get(_KEY_ALLOW_TOOLS, []))
-        # Same rule as above: contradictory narrowing is ambiguous, so deny
-        # rather than guess which line the instructor meant.
         if len(tool_directives) > 1:
             return CoursePolicy(
                 allow_writes=False,
@@ -162,11 +153,6 @@ def parse_policy_body(body: str) -> CoursePolicy:
         tools = frozenset(
             name.strip() for name in raw_tools.replace(",", " ").split() if name.strip()
         )
-        # An OMITTED allow_tools means "no extra narrowing". A PRESENT but empty
-        # one means the instructor either named nothing or left the line
-        # unfinished. Collapsing the two with `tools or None` would turn the most
-        # restrictive possible directive into the least restrictive one, so an
-        # empty list denies instead.
         if _KEY_ALLOW_TOOLS in values and not tools:
             return CoursePolicy(
                 allow_writes=False,
@@ -207,20 +193,12 @@ async def _read_policy_text(course_id: str) -> tuple[str | None, str]:
     * ``absent`` — the course was read and states no policy; apply the default
     * ``error`` — undetermined, or this caller cannot see the course; deny
     """
-    # The syllabus, which students cannot edit.
     response = await make_canvas_request(
         "get", f"/courses/{course_id}", params={"include[]": ["syllabus_body"]}
     )
     if isinstance(response, dict) and "error" in response:
-        # A 404 on the COURSE itself means this caller cannot see the course at
-        # all, which is a fact about the caller and not about policy. Deny, and
-        # do not let it become a cached verdict for everyone else. (The write
-        # would fail against Canvas anyway.)
         return None, "error"
 
-    # The course read succeeded, so an unmarked syllabus is genuinely "this
-    # course states no policy" rather than something this caller cannot see.
-    # That conclusion is caller-independent, so it is safe to cache.
     body = str(response.get("syllabus_body") or "")
     if not _has_policy_marker(body):
         return None, "absent"
@@ -287,12 +265,6 @@ async def get_course_policy(course_id: str | int) -> CoursePolicy:
             source="read_error",
         )
 
-    # A read failure is a property of THIS caller's request, not of the course:
-    # it can mean an expired session, a caller not enrolled, or a transient error.
-    # Caching it under the course id alone would let one bad caller deny writes
-    # for every legitimate student in that course for a full deny TTL. So it is
-    # never cached; the retry cost is small and falls only on the caller who
-    # actually hit the error.
     if policy.source == "read_error":
         return policy
 
@@ -301,9 +273,6 @@ async def get_course_policy(course_id: str | int) -> CoursePolicy:
         if policy.allow_writes
         else config.course_agent_policy_deny_ttl
     )
-    # Evict on write. Callers choose the course id, so on a long-running hosted
-    # server a stream of made-up ids would otherwise grow this map forever, even
-    # though every one of those lookups was denied.
     _evict_expired_policies()
     _policy_cache[key] = (time.monotonic() + ttl, policy)
     return policy

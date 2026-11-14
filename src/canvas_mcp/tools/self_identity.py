@@ -56,15 +56,6 @@ def register_self_identity_tools(mcp: FastMCP) -> None:
             include_concluded: Also include concluded/completed courses
                 (default False = active courses only).
         """
-        # Deliberately /courses rather than /users/self/enrollments: /courses
-        # returns the course name and code TOGETHER WITH the caller's own
-        # enrollments[] in a single call, and needs no roster permission.
-        # /users/self/enrollments returns bare course_ids, forcing an N+1 lookup.
-        # "unpublished" belongs here alongside "available". An instructor or TA
-        # can hold a perfectly active enrollment in a course they have not
-        # published yet, and omitting that state would tell them they have no
-        # active enrollments at all. This tool is registered for educators, so
-        # that is a live path rather than a corner case.
         params: dict = {
             "enrollment_state": "active",
             "state[]": ["available", "unpublished"],
@@ -72,11 +63,6 @@ def register_self_identity_tools(mcp: FastMCP) -> None:
             "per_page": 100,
         }
         if include_concluded:
-            # Widen the course state, and DROP enrollment_state rather than
-            # widening it. Canvas defines enrollment_state as a single string, so
-            # passing a list serializes as repeated parameters that Canvas may
-            # reject or honour only partially. Absent means "any enrollment
-            # state", which is exactly what including concluded history wants.
             params["state[]"] = ["available", "unpublished", "completed"]
             params.pop("enrollment_state")
 
@@ -126,9 +112,6 @@ def register_self_identity_tools(mcp: FastMCP) -> None:
             error = response.get("error") if isinstance(response, dict) else response
             return f"Error fetching your profile: {error}"
 
-        # Deliberately minimized: primary_email and sis_user_id are available in
-        # the payload but are NOT surfaced. Neither is needed to identify the
-        # caller to other tools, and both are needlessly sensitive in transcripts.
         return (
             "Your Canvas profile:\n\n"
             f"User ID: {response.get('id', 'N/A')}\n"

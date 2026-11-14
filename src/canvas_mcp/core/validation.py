@@ -19,11 +19,9 @@ from typing import (
 
 from .logging import log_debug, log_error
 
-# Type definitions for parameter validation
 T = TypeVar('T')
 F = TypeVar('F', bound=Callable[..., Any])
 
-# Boolean string constants
 TRUTHY_VALUES = frozenset({"true", "yes", "1", "t", "y"})
 FALSY_VALUES = frozenset({"false", "no", "0", "f", "n"})
 
@@ -62,9 +60,6 @@ def is_error_response(response: Any) -> bool:
     return isinstance(response, dict) and "error" in response
 
 
-# ---------------------------------------------------------------------------
-# Type-specific conversion / validation helpers
-# ---------------------------------------------------------------------------
 
 def _validate_optional(param_name: str, value: Any, args: tuple[Any, ...]) -> tuple[Any, Any, tuple[Any, ...]]:
     """Handle Optional types (Union[type, None]).
@@ -84,7 +79,6 @@ def _validate_optional(param_name: str, value: Any, args: tuple[Any, ...]) -> tu
     if len(non_none_types) == 1:
         expected_type = non_none_types[0]
     else:
-        # It's a Union of multiple types plus None
         union_type = non_none_types[0]
         for candidate in non_none_types[1:]:
             union_type = union_type | candidate
@@ -119,7 +113,6 @@ def _validate_union(param_name: str, value: Any, args: tuple[Any, ...]) -> Any:
         except ValueError as e:
             errors.append(str(e))
 
-    # If we get here, none of the types worked
     type_names = ", ".join(str(t) for t in args)
     raise ValueError(f"Parameter '{param_name}' with value '{value}' (type: {type(value).__name__}) "
                     f"could not be converted to any of the expected types: {type_names}")
@@ -239,7 +232,6 @@ def _convert_to_list(param_name: str, value: Any) -> list:
     if isinstance(value, list):
         return value
     elif isinstance(value, str):
-        # Try to parse as JSON array
         try:
             parsed = json.loads(value)
             if isinstance(parsed, list):
@@ -247,7 +239,6 @@ def _convert_to_list(param_name: str, value: Any) -> list:
         except json.JSONDecodeError:
             log_debug(f"JSON parse failed for list parameter '{param_name}', trying comma-separated")
 
-        # Try comma-separated values
         return [item.strip() for item in value.split(',') if item.strip()]
     else:
         raise ValueError(f"Parameter '{param_name}' with value '{value}' could not be converted to list")
@@ -283,7 +274,6 @@ def _convert_to_dict(param_name: str, value: Any) -> dict:
         raise ValueError(f"Parameter '{param_name}' with value '{value}' could not be converted to dict")
 
 
-# Type-dispatch mapping for basic types
 _TYPE_DISPATCH: dict[type, Callable[[str, Any], Any]] = {
     str: lambda param_name, value: str(value),
     int: _convert_to_int,
@@ -309,45 +299,35 @@ def validate_parameter(param_name: str, value: Any, expected_type: Any) -> Any:
     Raises:
         ValueError: If validation fails
     """
-    # Special handling for Union types (e.g., Union[int, str])
     origin = get_origin(expected_type)
     args = get_args(expected_type)
 
-    # Handle Optional types (which are Union[type, None])
     is_optional = False
     if origin in (Union, types.UnionType) and args and type(None) in args:
         is_optional = True
         expected_type, origin, args = _validate_optional(param_name, value, args)
 
-    # Handle None values for optional parameters
     if value is None:
         if is_optional:
             return None
         else:
             raise ValueError(f"Parameter '{param_name}' cannot be None")
 
-    # Handle Union types (including those extracted from Optional)
     if origin in (Union, types.UnionType):
         return _validate_union(param_name, value, args)
 
-    # Handle Literal types (e.g. Literal["names", "signatures", "full"])
     if origin is Literal:
         return _validate_literal(param_name, value, expected_type)
 
-    # Handle basic types with dispatch
     if expected_type in _TYPE_DISPATCH:
         return _TYPE_DISPATCH[expected_type](param_name, value)
 
-    # For parameterized generic types (e.g. list[str], dict[str, int]),
-    # dispatch on the origin type
     if origin in _TYPE_DISPATCH:
         return _TYPE_DISPATCH[origin](param_name, value)
 
-    # For other types, just check if it's an instance
     if isinstance(value, expected_type):
         return value
 
-    # If we get here, validation failed
     raise ValueError(f"Parameter '{param_name}' with value '{value}' (type: {type(value).__name__}) "
                     f"is not compatible with expected type: {expected_type}")
 
@@ -359,25 +339,20 @@ def validate_params(func: F) -> F:
 
     @functools.wraps(func)
     async def wrapper(*args: Any, **kwargs: Any) -> Any:
-        # Combine args and kwargs based on function signature
         bound_args = sig.bind(*args, **kwargs)
         bound_args.apply_defaults()
 
-        # Validate each parameter
         for param_name, param_value in bound_args.arguments.items():
             if param_name in type_hints:
                 expected_type = type_hints[param_name]
                 try:
-                    # Skip return type annotation
                     if param_name != "return":
                         bound_args.arguments[param_name] = validate_parameter(param_name, param_value, expected_type)
                 except ValueError as e:
-                    # Return error as JSON response
                     error_message = str(e)
                     log_error(f"Parameter validation error: {error_message}", param_name=param_name, value=param_value)
                     return json.dumps({"error": error_message})
 
-        # Call the original function with validated parameters
         return await func(**bound_args.arguments)
 
     return cast(F, wrapper)

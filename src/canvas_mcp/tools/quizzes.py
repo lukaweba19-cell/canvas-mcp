@@ -328,9 +328,6 @@ def register_quiz_tools(mcp: FastMCP) -> None:
                 if isinstance(quiz, dict) and quiz.get("id") is not None
             ]
 
-            # Planner-only quiz due items (often New Quizzes) do not appear in
-            # the Classic Quizzes listing; keep them visible instead of losing
-            # work the student still has to do.
             seen = {str(quiz.get("id")) for quiz in course_quizzes}
             for item in planner_items:
                 if str(item.get("course_id")) != str(course_id):
@@ -501,8 +498,6 @@ def register_quiz_tools(mcp: FastMCP) -> None:
         if validated is None:
             return "Error: quiz_id must be a numeric Canvas quiz ID."
         course_id = await get_course_id(course_identifier)
-        # Read the quiz before policy: an expired session must surface as the
-        # standard session error, not as a generic "policy could not be read".
         quiz, error = await _load_quiz(course_id, str(validated))
         if quiz is None:
             return (

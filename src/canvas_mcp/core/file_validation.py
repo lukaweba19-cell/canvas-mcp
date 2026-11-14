@@ -14,28 +14,20 @@ import re
 from pathlib import Path
 from typing import NamedTuple
 
-# Default maximum file size (100 MB) - conservative start, Canvas allows up to 500MB
 DEFAULT_MAX_FILE_SIZE_MB = 100
 DEFAULT_MAX_FILE_SIZE_BYTES = DEFAULT_MAX_FILE_SIZE_MB * 1024 * 1024
 
-# Allowed file extensions (whitelist approach for security)
 ALLOWED_EXTENSIONS = {
-    # Documents
     ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
     ".txt", ".csv", ".rtf", ".odt", ".ods", ".odp",
-    # Code/text
     ".md", ".py", ".js", ".ts", ".html", ".css", ".json", ".xml",
     ".java", ".c", ".cpp", ".h", ".rb", ".go", ".rs", ".sql",
     ".ipynb", ".r", ".rmd",
-    # Images
     ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".bmp", ".ico",
-    # Archives
     ".zip", ".tar", ".gz", ".7z",
-    # Audio/Video (common formats)
     ".mp3", ".mp4", ".wav", ".m4a", ".webm", ".mov",
 }
 
-# MIME type mappings for common extensions
 MIME_TYPE_MAP = {
     ".pdf": "application/pdf",
     ".doc": "application/msword",
@@ -113,10 +105,8 @@ def validate_file_for_upload(
     if allowed_extensions is None:
         allowed_extensions = ALLOWED_EXTENSIONS
 
-    # Normalize the path
     path = Path(file_path).resolve()
 
-    # Check if file exists
     if not path.exists():
         return FileValidationResult(
             valid=False,
@@ -126,7 +116,6 @@ def validate_file_for_upload(
             sanitized_name=""
         )
 
-    # Check if it's a file (not a directory)
     if not path.is_file():
         return FileValidationResult(
             valid=False,
@@ -136,7 +125,6 @@ def validate_file_for_upload(
             sanitized_name=""
         )
 
-    # Check if file is readable
     if not os.access(path, os.R_OK):
         return FileValidationResult(
             valid=False,
@@ -146,7 +134,6 @@ def validate_file_for_upload(
             sanitized_name=""
         )
 
-    # Check file size
     file_size = path.stat().st_size
     if file_size == 0:
         return FileValidationResult(
@@ -168,7 +155,6 @@ def validate_file_for_upload(
             sanitized_name=""
         )
 
-    # Check file extension
     extension = path.suffix.lower()
     if extension not in allowed_extensions:
         return FileValidationResult(
@@ -179,10 +165,8 @@ def validate_file_for_upload(
             sanitized_name=""
         )
 
-    # Get MIME type
     mime_type = detect_mime_type(str(path))
 
-    # Sanitize filename
     sanitized_name = sanitize_filename(path.name)
 
     return FileValidationResult(
@@ -213,14 +197,11 @@ def detect_mime_type(file_path: str) -> str:
     path = Path(file_path)
     extension = path.suffix.lower()
 
-    # Check our custom mapping first
     if extension in MIME_TYPE_MAP:
         return MIME_TYPE_MAP[extension]
 
-    # Fall back to mimetypes module
     mime_type, _ = mimetypes.guess_type(str(path))
 
-    # Default to octet-stream if unknown
     return mime_type or "application/octet-stream"
 
 
@@ -242,30 +223,22 @@ def sanitize_filename(filename: str) -> str:
         >>> sanitize_filename("My File (2023) [v1].pdf")
         'My_File_2023_v1.pdf'
     """
-    # Get the extension
     path = Path(filename)
     extension = path.suffix.lower()
     stem = path.stem
 
-    # Replace spaces with underscores
     stem = stem.replace(" ", "_")
 
-    # Remove or replace problematic characters
-    # Keep alphanumeric, underscores, hyphens, and dots
     stem = re.sub(r'[^\w\-.]', '_', stem)
 
-    # Collapse multiple underscores
     stem = re.sub(r'_+', '_', stem)
 
-    # Remove leading/trailing underscores
     stem = stem.strip('_')
 
-    # Ensure we have a valid stem
     if not stem:
         stem = "file"
 
-    # Limit length (Canvas has limits, typically 255 chars total)
-    max_stem_length = 200  # Leave room for extension
+    max_stem_length = 200
     if len(stem) > max_stem_length:
         stem = stem[:max_stem_length]
 

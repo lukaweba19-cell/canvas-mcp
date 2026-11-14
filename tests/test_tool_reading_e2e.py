@@ -110,7 +110,6 @@ async def test_text_pdf_is_read_through_the_real_tools(course, mcp):
 async def test_scanned_pdf_is_read_by_built_in_ocr_through_the_real_tools(course, mcp):
     read = await call(mcp, "read_course_material", course_identifier=231, file_id=402)
 
-    # OCR (not a text layer) is what makes this readable, with a real word count.
     assert "Status: readable — " in read, read
     assert "words extracted" in read
 

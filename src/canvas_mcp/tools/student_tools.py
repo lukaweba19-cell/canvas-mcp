@@ -104,13 +104,6 @@ async def _fetch_planner_peer_reviews(
         plannable = item.get("plannable") or {}
         if plannable.get("workflow_state") == "completed":
             continue
-        # Permissive assessor guard: the assignment-scan path filters on
-        # assessor_id == my_id explicitly. The Planner feed is meant to be
-        # the caller's own to-do list, so it should already be self-scoped —
-        # but that is not documented, so only skip an item when Canvas
-        # positively names a *different* assessor. A missing/None
-        # assessor_id (undocumented field, may not always be populated) does
-        # not exclude the item.
         item_assessor_id = plannable.get("assessor_id")
         if item_assessor_id is not None and item_assessor_id != my_id:
             continue
@@ -138,11 +131,6 @@ def register_student_tools(mcp: FastMCP) -> None:
         if days < 1:
             return "Error: days must be at least 1."
 
-        # /users/self/upcoming_events is hardcoded by Canvas to the
-        # dashboard's 7-day "Coming Up" window regardless of parameters
-        # (#222), so the Planner API is used instead: it honors an explicit
-        # start/end range and already carries per-item submission status,
-        # which also removes a per-assignment submissions/self round trip.
         start_date = datetime.now(UTC)
         end_date = start_date + timedelta(days=days)
 
@@ -166,9 +154,6 @@ def register_student_tools(mcp: FastMCP) -> None:
             if plannable_type in ("assignment", "quiz"):
                 due_at = plannable.get("due_at") or item.get("plannable_date")
             elif plannable_type == "discussion_topic":
-                # Graded discussions are assignments too; the planner reports
-                # them as discussion_topic but only graded ones carry due_at
-                # (ungraded to-do discussions have todo_date instead).
                 due_at = plannable.get("due_at")
             else:
                 continue
@@ -193,12 +178,10 @@ def register_student_tools(mcp: FastMCP) -> None:
         if not assignments:
             return f"No assignments due in the next {days} days."
 
-        # Sort by due date (use timezone-aware max for fallback)
         assignments.sort(
             key=lambda x: parse_date(x["due_at"]) or datetime.max.replace(tzinfo=UTC)
         )
 
-        # Format output
         output_lines = [f"Upcoming Assignments (Next {days} Days):\n"]
 
         for assignment in assignments:
@@ -224,7 +207,6 @@ def register_student_tools(mcp: FastMCP) -> None:
             course_identifier: Course code or Canvas ID (omit for all courses)
         """
         if course_identifier:
-            # Get submissions for specific course
             course_id = await get_course_id(course_identifier)
 
             assignments = await fetch_all_paginated_results(
@@ -239,7 +221,6 @@ def register_student_tools(mcp: FastMCP) -> None:
             output_lines = [f"Submission Status for {course_display}:\n"]
 
         else:
-            # Get all courses and their assignments
             courses = await fetch_all_paginated_results(
                 "/courses",
                 params={"enrollment_state": "active", "per_page": 100}
@@ -274,11 +255,6 @@ def register_student_tools(mcp: FastMCP) -> None:
         if not assignments:
             return "No assignments found."
 
-        # Canvas only knows whether work was submitted *to Canvas*. LTI/external
-        # assignments (such as Gradescope) can be completed and graded there
-        # while Canvas continues to return an unsubmitted local record.
-        # Keep those out of the missing/overdue bucket rather than reporting a
-        # false deadline breach.
         submitted = []
         missing = []
         external_tools = []
@@ -293,7 +269,6 @@ def register_student_tools(mcp: FastMCP) -> None:
             elif is_external_tool:
                 external_tools.append(assignment)
             else:
-                # Check if past due (use timezone-aware datetime)
                 due_at = assignment.get("due_at")
                 if due_at:
                     due_date = parse_date(due_at)
@@ -304,7 +279,6 @@ def register_student_tools(mcp: FastMCP) -> None:
                 else:
                     missing.append((assignment, "NOT SUBMITTED"))
 
-        # Format output
         if missing:
             output_lines.append(f"⚠️  Missing Submissions ({len(missing)}):\n")
             for assignment, status in missing:
@@ -335,7 +309,7 @@ def register_student_tools(mcp: FastMCP) -> None:
 
         if submitted:
             output_lines.append(f"\n✅ Submitted ({len(submitted)}):\n")
-            for assignment in submitted[:10]:  # Show first 10
+            for assignment in submitted[:10]:
                 name = assignment.get("name", "Unnamed")
                 submission = assignment.get("submission", {})
                 submitted_at = format_date(submission.get("submitted_at"))
@@ -373,17 +347,14 @@ def register_student_tools(mcp: FastMCP) -> None:
             name = course.get("name", "Unnamed Course")
             course_code = course.get("course_code", "")
 
-            # Get enrollment data (grades)
             enrollments = course.get("enrollments", [])
             if enrollments:
-                enrollment = enrollments[0]  # Student typically has one enrollment per course
+                enrollment = enrollments[0]
 
-                # Current score
                 current_score = enrollment.get("computed_current_score")
                 final_score = enrollment.get("computed_final_score")
                 current_grade = enrollment.get("computed_current_grade", "N/A")
 
-                # Format grade info
                 if current_score is not None:
                     grade_info = f"{current_grade} ({current_score:.1f}%)"
                 elif final_score is not None:
@@ -456,8 +427,6 @@ def register_student_tools(mcp: FastMCP) -> None:
                 assignment listing, so an assignment where that flag is missing or
                 stale for any reason would otherwise be silently skipped.
         """
-        # The peer-review listing is only meaningful relative to the caller:
-        # reviews are filtered to assessor_id == the current user.
         me = await make_canvas_request("get", "/users/self")
         if not isinstance(me, dict) or "error" in me or not me.get("id"):
             detail = me.get("error") if isinstance(me, dict) else me
@@ -514,7 +483,6 @@ def register_student_tools(mcp: FastMCP) -> None:
         if course_identifier:
             course_ids = [await get_course_id(course_identifier)]
         else:
-            # Get all active courses
             courses = await fetch_all_paginated_results(
                 "/courses",
                 params={"enrollment_state": "active", "per_page": 100}
@@ -525,14 +493,9 @@ def register_student_tools(mcp: FastMCP) -> None:
             course_ids = [course.get("id") for course in courses if course.get("id")]
 
         all_peer_reviews = []
-        # Endpoints that errored. "No pending reviews" is only a safe answer
-        # when every listing actually succeeded — the assignment-level
-        # peer_reviews endpoint is permission-gated on some instances, and a
-        # swallowed 401 here previously read as "you have nothing to do ✅".
         unchecked: list[str] = []
 
         for course_id in course_ids:
-            # Get assignments for this course
             assignments = await fetch_all_paginated_results(
                 f"/courses/{course_id}/assignments",
                 params={"per_page": 100}
@@ -542,12 +505,10 @@ def register_student_tools(mcp: FastMCP) -> None:
                 unchecked.append(f"course {course_id}: {assignments['error']}")
                 continue
 
-            # Check each assignment for peer reviews
             for assignment in assignments if isinstance(assignments, list) else []:
                 if assignment.get("peer_reviews"):
                     assignment_id = assignment.get("id")
 
-                    # Get peer reviews for this assignment
                     peer_reviews = await fetch_all_paginated_results(
                         f"/courses/{course_id}/assignments/{assignment_id}/peer_reviews",
                         params={"include[]": ["user"], "per_page": 100}
@@ -571,18 +532,6 @@ def register_student_tools(mcp: FastMCP) -> None:
                             review["_source"] = "assignment scan"
                             all_peer_reviews.append(review)
 
-        # Merge in the Planner-based discovery path (#275). Union, not
-        # replacement — the assignment-scoped scan above works on some
-        # instances, and we have no way to live-verify the Planner feed
-        # against a real pending review, so neither path is dropped.
-        # Course IDs are cached/compared as strings (get_course_id's return
-        # type), but Canvas returns course_id as a JSON number on planner
-        # items — compare both sides as strings or every planner item gets
-        # silently filtered out / never dedups against the assignment scan.
-        # A single course_id is passed through to Canvas's own
-        # context_codes[] filter (server-side pre-filter); the client-side
-        # filter below stays as a backstop since that behavior isn't
-        # documented as guaranteed.
         planner_course_id = course_ids[0] if course_identifier and len(course_ids) == 1 else None
         planner_reviews, planner_error = await _fetch_planner_peer_reviews(
             my_id, course_id=planner_course_id
@@ -593,13 +542,6 @@ def register_student_tools(mcp: FastMCP) -> None:
                 r for r in planner_reviews if str(r.get("_course_id")) in course_id_strs
             ]
 
-        # Review "id" is an AssessmentRequest id on both paths, but its type
-        # isn't guaranteed to match: the assignment-scan path gets it from
-        # the /peer_reviews endpoint (typically an int), while the Planner
-        # docs describe the top-level plannable_id as a string even though
-        # plannable.id (used here) is typically an int. Normalize with
-        # str() on both sides of the key so a type-only mismatch never
-        # produces a duplicate entry.
         dedup_keys = {
             (str(r.get("_course_id")), str(r.get("id")))
             for r in all_peer_reviews
@@ -644,10 +586,6 @@ def register_student_tools(mcp: FastMCP) -> None:
             user_id = review.get("user_id")
             source = review.get("_source", "assignment scan")
             source_label = "Planner feed" if source == "planner" else "Assignment scan"
-            # Measured live (#275, khagyard): the Planner feed's
-            # assessment_request plannable carries no user_id at all, so
-            # this must render an honest "not identified" note rather than
-            # the literal string "Student None".
             reviewing_line = (
                 f"  Reviewing: Student {user_id}\n"
                 if user_id is not None

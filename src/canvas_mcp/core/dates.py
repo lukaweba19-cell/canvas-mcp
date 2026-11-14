@@ -64,29 +64,24 @@ def parse_date(date_str: str | None) -> datetime.datetime | None:
     if not date_str:
         return None
 
-    # Remove any surrounding whitespace
     date_str = date_str.strip()
 
-    # Try different date formats
     formats = [
-        # ISO 8601 formats
-        '%Y-%m-%dT%H:%M:%SZ',  # 2023-01-15T14:30:00Z
-        '%Y-%m-%dT%H:%M:%S.%fZ',  # 2023-01-15T14:30:00.000Z
-        '%Y-%m-%dT%H:%M:%S%z',  # 2023-01-15T14:30:00+0000
-        '%Y-%m-%dT%H:%M:%S.%f%z',  # 2023-01-15T14:30:00.000+0000
+        '%Y-%m-%dT%H:%M:%SZ',
+        '%Y-%m-%dT%H:%M:%S.%fZ',
+        '%Y-%m-%dT%H:%M:%S%z',
+        '%Y-%m-%dT%H:%M:%S.%f%z',
 
-        # Common date formats
-        '%Y-%m-%d %H:%M:%S',  # 2023-01-15 14:30:00
-        '%Y-%m-%d',  # 2023-01-15
-        '%m/%d/%Y %H:%M:%S',  # 01/15/2023 14:30:00
-        '%m/%d/%Y',  # 01/15/2023
+        '%Y-%m-%d %H:%M:%S',
+        '%Y-%m-%d',
+        '%m/%d/%Y %H:%M:%S',
+        '%m/%d/%Y',
     ]
 
     for fmt in formats:
         try:
             dt = datetime.datetime.strptime(date_str, fmt)
 
-            # If no timezone info, assume UTC
             if dt.tzinfo is None:
                 dt = dt.replace(tzinfo=datetime.UTC)
 
@@ -94,7 +89,6 @@ def parse_date(date_str: str | None) -> datetime.datetime | None:
         except ValueError:
             continue
 
-    # If all parsing attempts fail, return None
     print(f"Warning: Could not parse date string: {date_str}", file=sys.stderr)
     return None
 
@@ -118,7 +112,7 @@ def format_date(date_str: str | None) -> str:
 
     dt = parse_date(date_str)
     if not dt:
-        return date_str  # Return original if parsing fails
+        return date_str
 
     tz = _output_tz()
     local_dt = dt.astimezone(tz)

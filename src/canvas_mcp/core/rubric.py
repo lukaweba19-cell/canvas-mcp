@@ -25,7 +25,6 @@ from typing import Any
 
 from . import extract, student_store
 
-# Words that carry no signal when deciding whether a criterion is mentioned.
 _STOPWORDS = frozenset(
     """
     a an and are as at be been being but by can could did do does for from had has
@@ -47,7 +46,6 @@ _RUBRIC_HEADING = re.compile(r"(?im)^[#*\s]*rubric\b.*$")
 _TABLE = re.compile(r"(?is)<table\b.*?</table>")
 _ROW = re.compile(r"(?is)<tr\b.*?</tr>")
 _CELL = re.compile(r"(?is)<t[dh]\b[^>]*>(.*?)</t[dh]>")
-# Plain-text tables: "Thesis clarity        20 pts" (no pipes).
 _SPACED_ROW = re.compile(
     r"(?m)^(?P<desc>[^\t|]{3,}?)\s{2,}(?P<points>\d+(?:\.\d+)?)\s*(?:pts?|points?)?\s*$",
     re.IGNORECASE,
@@ -191,9 +189,6 @@ class CriterionVerdict:
     missing: list[str] = field(default_factory=list)
 
 
-# ---------------------------------------------------------------------------
-# Parsing
-# ---------------------------------------------------------------------------
 
 
 def _number(value: Any) -> float | None:
@@ -206,9 +201,6 @@ def _number(value: Any) -> float | None:
 def from_canvas(assignment: dict[str, Any]) -> Rubric:
     """Parse Canvas's structured rubric object from an assignment payload."""
     raw = assignment.get("rubric") or {}
-    # Canvas returns an assignment's attached rubric as a bare list of
-    # criteria; the standalone /rubrics endpoint nests them under "criteria".
-    # Accept both rather than crashing on the common assignment payload.
     if isinstance(raw, dict):
         items = raw.get("criteria") or []
     elif isinstance(raw, list):
@@ -293,7 +285,6 @@ def from_prompt(text: str) -> Rubric:
     heading = _RUBRIC_HEADING.search(text)
     if heading:
         rest = text[heading.end() :]
-        # Stop at the next heading so an unrelated later section is not parsed.
         following = _ANY_HEADING.search(rest)
         block = rest[: following.start()] if following else rest
 
@@ -338,7 +329,6 @@ def from_prompt(text: str) -> Rubric:
             )
 
     if len(criteria) < 2:
-        # A single stray "worth 10 points" line is not a rubric.
         return Rubric()
     return Rubric(criteria=tuple(criteria), source="prompt")
 
@@ -354,10 +344,6 @@ def from_assignment(assignment: dict[str, Any]) -> Rubric:
     if prompt.is_empty:
         return canvas
 
-    # Canvas is authoritative, but a prompt often lists criteria the attached
-    # rubric omits. Add only ones not already named. "Thesis clarity" and
-    # "Thesis clarity (arguable claim)" are the same criterion, so compare with
-    # the parenthetical note stripped.
     def norm(text: str) -> str:
         return re.sub(r"\s+", " ", re.sub(r"\(.*?\)", "", text)).strip().lower()
 
@@ -380,9 +366,6 @@ def from_assignment(assignment: dict[str, Any]) -> Rubric:
     )
 
 
-# ---------------------------------------------------------------------------
-# Persistence
-# ---------------------------------------------------------------------------
 
 
 def save(
@@ -421,9 +404,6 @@ def load(
     return None
 
 
-# ---------------------------------------------------------------------------
-# Using a rubric
-# ---------------------------------------------------------------------------
 
 
 def keywords(text: str) -> set[str]:

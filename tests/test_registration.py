@@ -7,25 +7,20 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
-# Every tool the student feature set is supposed to add.
 NEW_TOOLS = {
-    # reading course material
     "get_course_content_map",
     "read_course_material",
     "read_material_section",
     "read_page_text",
-    # study guides
     "build_study_guide",
     "update_study_guide",
     "list_study_guides",
     "read_study_guide",
     "make_practice_test",
-    # assignment workspace
     "start_assignment_work",
     "save_assignment_draft",
     "read_assignment_draft",
     "list_assignment_drafts",
-    # notes / journal / voice
     "save_note",
     "search_notes",
     "list_notes",
@@ -34,15 +29,12 @@ NEW_TOOLS = {
     "get_my_handoff",
     "save_voice_sample",
     "check_draft_style",
-    # rubrics
     "get_my_assignment_rubric",
     "check_work_against_rubric",
-    # deeper student reads
     "get_my_assignment_brief",
     "get_my_grade_breakdown",
     "get_my_week_plan",
     "get_my_feedback",
-    # quizzes: reading is always on, taking is opt-in
     "list_quizzes",
     "get_quiz_details",
     "get_my_quiz_attempts",
@@ -51,7 +43,6 @@ NEW_TOOLS = {
     "submit_quiz_attempt",
 }
 
-# The capabilities the user asked for, each mapped to the tools that provide it.
 CAPABILITIES = {
     "read pdfs and slides": {
         "get_course_content_map",
@@ -93,7 +84,6 @@ CAPABILITIES = {
     },
 }
 
-# Nothing from the educator half may come back.
 EDUCATOR_MARKERS = (
     "grade_with_rubric",
     "list_submissions",

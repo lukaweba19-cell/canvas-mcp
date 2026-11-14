@@ -23,21 +23,14 @@ from .session import (
 )
 from .write_outcome import NO_WRITE_STATUSES, RequestFailure, WriteOutcome
 
-# Rate limit retry configuration
 MAX_RETRIES = 3
 INITIAL_BACKOFF_SECONDS = 2
 
-# Default number of results per page for paginated requests
 DEFAULT_PAGE_SIZE = 100
-# Fail explicitly rather than looping forever on a broken pagination chain.
 MAX_PAGINATION_PAGES = 10000
 API_ROOT_REST: Final = "rest"
 API_ROOT_QUIZ: Final = "quiz"
 
-#: One wording for an expired session, wherever it surfaces (JSON request, file
-#: download, upload confirmation). Callers must never see an empty result
-#: instead: on a cookie-authenticated API an empty list and a signed-out session
-#: look identical unless the login redirect is detected and reported.
 SESSION_EXPIRED_MESSAGE = (
     "Canvas session expired or was signed out. The next Canvas tool call will "
     "open the Chrome login window again so you can sign in."
@@ -106,9 +99,8 @@ def _resolve_canvas_api_root(base_api_url: str, api_root: Literal["rest", "quiz"
     return f"{base_api_url[:match.start()]}/api/quiz/v1"
 
 
-# Concurrency limiter for outbound Canvas API calls
 _request_semaphore: asyncio.Semaphore | None = None
-_semaphore_loop_ref: "weakref.ref[asyncio.AbstractEventLoop] | None" = None  # weakref to the loop that owns _request_semaphore
+_semaphore_loop_ref: "weakref.ref[asyncio.AbstractEventLoop] | None" = None
 
 
 def _get_request_semaphore() -> asyncio.Semaphore:
@@ -183,24 +175,6 @@ def _self_submission_indices(segments: list[str]) -> set[int]:
     }
 
 
-# Endpoints that describe ONLY the authenticated caller. Anonymizing these
-# corrupts the caller's own identity (they would be told their name is
-# "Student_<hash>"), which is a data-integrity bug, not a privacy win: FERPA
-# protects a student's record FROM OTHERS, never from themselves.
-#
-# This is a deliberate loosening of a FERPA control, so it is an EXACT
-# full-joined-path allowlist, never a prefix or substring rule. A looser form is
-# exactly how #164/#166 happened. Notably NOT exempt (all still anonymized):
-#   users/self/observees   -> other people (the observed students)
-#   users/self/courses/... -> may embed other users
-#   courses/*/enrollments, courses/*/users -> rosters
-#   users/<other-id>/profile -> somebody else
-#   users/self/enrollments -> looks self-only by its path but is NOT. Canvas
-#       expands it with include[]=observed_users, which returns OTHER students'
-#       records on observer enrollments. This gate sees only the path and cannot
-#       see request parameters, so exempting the path would let those bypass
-#       anonymization whenever that include is present. get_my_enrollments
-#       deliberately reads /courses instead, so nothing needs this exemption.
 _SELF_ONLY_ENDPOINTS = frozenset({
     "users/self",
     "users/self/profile",
@@ -230,31 +204,17 @@ def _determine_data_type(endpoint: str) -> str:
     if _has_route_segment(segments, {'assignments'}):
         return 'assignments'
     if _has_route_segment(segments, {'enrollments'}):
-        return 'users'  # Enrollments contain user data
+        return 'users'
     return 'general'
 
 
-# --------------------------------------------------------------------------
-# Anonymization tiers (issue #179)
-# --------------------------------------------------------------------------
-# A single boolean could not express the two endpoint families found by the
-# #166 follow-up audit: /conversations needs the free-text half of the scrubber
-# without the name half, /pages needs the name half without the free-text half.
-# Forcing either into the all-or-nothing "full" tier costs real functionality,
-# and leaving them at "none" (the pre-#179 state) leaks PII.
 
-#: Not sensitive — response passes through untouched.
 ANONYMIZE_NONE = "none"
 
-#: Everything: recursive identity scrub + free-text redaction + the typed
-#: refinements (submission-content redaction, long-description truncation).
 ANONYMIZE_FULL = "full"
 
-#: Identity only — names/avatars/direct identifiers scrubbed, free text kept.
 ANONYMIZE_IDENTITY = "identity"
 
-#: Free text only — emails/phones redacted from bodies, direct identifiers and
-#: avatars nulled, but display names preserved.
 ANONYMIZE_FREE_TEXT = "free_text"
 
 
@@ -303,35 +263,24 @@ def _endpoint_anonymization_mode(endpoint: str) -> str:
     """
     segments = _path_segments(endpoint)
 
-    # Caller-only identity endpoints: exact-path allowlist, checked before the
-    # sensitive-segment rules because 'users' would otherwise match.
     if _is_self_only_endpoint(segments):
         return ANONYMIZE_NONE
 
-    # Drop only the 'submissions' segment of a /submissions/self route; every
-    # other sensitive segment keeps its effect.
     self_indices = _self_submission_indices(segments)
     if self_indices:
         segments = [seg for i, seg in enumerate(segments) if i not in self_indices]
 
-    # Discussion content endpoints carry student posts and names
     if 'discussion_topics' in segments and _has_route_segment(
         segments, {'entries', 'view', 'entry_list', 'replies'}
     ):
         return ANONYMIZE_FULL
 
-    # Endpoints whose responses contain student records
     if _has_route_segment(segments, {'users', 'submissions', 'enrollments', 'analytics'}):
         return ANONYMIZE_FULL
 
     if _has_route_segment(segments, {'conversations'}):
         return ANONYMIZE_FREE_TEXT
 
-    # 'front_page' is a page too and returns the same last_edited_by block, but
-    # its path carries no 'pages' segment, so it slipped the slug rule and stayed
-    # ungated after #179. Unlike a page slug, 'front_page' is a fixed Canvas
-    # route word and cannot be user-controlled, so matching it needs no
-    # escalation guard.
     if _has_route_segment(segments, {'pages'}) or 'front_page' in segments:
         return ANONYMIZE_IDENTITY
 
@@ -428,23 +377,13 @@ async def make_canvas_request(
 
     config = get_config()
 
-    # A browser session is the only credential. ensure_session() reuses the
-    # stored one, or opens the Chrome login window when there is none.
     session, session_reason = await ensure_session()
     if session is None:
         return {"error": session_reason or "No Canvas session available."}
 
-    # Ensure the endpoint starts with a slash
     if not endpoint.startswith('/'):
         endpoint = f"/{endpoint}"
 
-    # Endpoints are built by f-string interpolation of caller-supplied identifiers
-    # (".../assignments/{assignment_id}/submissions/self"). A '?' or '#' inside an
-    # identifier ends the path early and demotes everything after it to the query
-    # or fragment, so a value like "123/submissions/456?" silently retargets a
-    # hard-coded self-scoped route at another user's record. Every caller passes
-    # query parameters via `params=`, so a delimiter in the path is always
-    # smuggling, never a legitimate call.
     bad_delimiter = next((c for c in ("?", "#") if c in endpoint), None)
     if bad_delimiter is not None:
         log_warning(
@@ -471,12 +410,8 @@ async def make_canvas_request(
         return {"error": str(exc)}
     url = f"{base_url}{endpoint}"
 
-    # Own the client before awaiting the semaphore: cancellation while queued
-    # must close request-local clients too.
     try:
         if _pagination is not None and _pagination.get("url"):
-            # Canvas next links are opaque. Preserve their exact query while
-            # refusing to forward credentials to another origin or endpoint.
             try:
                 target = httpx.URL(cast(str, _pagination["url"]))
             except httpx.InvalidURL:
@@ -490,7 +425,6 @@ async def make_canvas_request(
         async with semaphore:
             for attempt in range(MAX_RETRIES + 1):
                 try:
-                    # Log the request for debugging (if enabled)
                     if config.log_api_requests:
                         retry_info = f" (retry {attempt}/{MAX_RETRIES})" if attempt > 0 else ""
                         log_debug(f"Making {method.upper()} request to {sanitize_url(url)}{retry_info}")
@@ -499,16 +433,12 @@ async def make_canvas_request(
                         response = await client.get(url, params=params)
                     elif method.lower() == "post":
                         if files:
-                            # File uploads always pass dict form fields, never
-                            # the list-of-tuples encoding.
                             response = await client.post(
                                 url,
                                 data=cast("dict[str, Any] | None", data),
                                 files=files,
                             )
                         elif use_form_data:
-                            # Handle list of tuples separately to work around httpx async bug
-                            # with duplicate keys (e.g., module[prerequisite_module_ids][])
                             if isinstance(data, list):
                                 encoded = urlencode(data)
                                 response = await client.post(
@@ -522,7 +452,6 @@ async def make_canvas_request(
                             response = await client.post(url, json=data)
                     elif method.lower() == "put":
                         if use_form_data:
-                            # Handle list of tuples separately to work around httpx async bug
                             if isinstance(data, list):
                                 encoded = urlencode(data)
                                 response = await client.put(
@@ -539,8 +468,6 @@ async def make_canvas_request(
                     else:
                         return {"error": f"Unsupported method: {method}"}
 
-                    # Check for a login redirect BEFORE raise_for_status: a 302
-                    # to /login is an expired session, not an API error.
                     if _is_login_response(response):
                         clear_session()
                         return {"error": SESSION_EXPIRED_MESSAGE}
@@ -550,24 +477,18 @@ async def make_canvas_request(
                         _pagination["current"] = str(response.request.url)
                         _pagination["next"] = response.links.get("next", {}).get("url")
 
-                    # Apply anonymization if enabled and this endpoint contains student data
-                    # Skip if explicitly requested (e.g., from paginated fetcher that will anonymize the full result)
                     if not skip_anonymization and config.enable_data_anonymization:
                         result, applied = _anonymize_for_endpoint(result, endpoint)
 
-                        # Log anonymization for debugging (if enabled)
                         if config.anonymization_debug and applied != ANONYMIZE_NONE:
                             log_debug(f"Applied {applied} anonymization to {endpoint}")
 
-                    # Audit: log successful data access
                     log_data_access(method, endpoint, "success")
 
                     return result
 
                 except httpx.HTTPStatusError as e:
-                    # Handle rate limiting with exponential backoff
                     if e.response.status_code == 429 and attempt < MAX_RETRIES:
-                        # Check for Retry-After header
                         retry_after = e.response.headers.get('Retry-After')
                         if retry_after:
                             try:
@@ -581,7 +502,6 @@ async def make_canvas_request(
                         await asyncio.sleep(wait_time)
                         continue
 
-                    # Not a rate limit error or out of retries - format and return error
                     error_message = f"HTTP error: {e.response.status_code}"
                     try:
                         error_details = e.response.json()
@@ -592,7 +512,6 @@ async def make_canvas_request(
 
                     log_error(f"API error on {sanitize_url(endpoint)}", status_code=e.response.status_code)
 
-                    # Audit: log HTTP error (status code only — response body may contain PII)
                     log_data_access(method, endpoint, "error", f"HTTP {e.response.status_code}")
 
                     outcome = (WriteOutcome.REJECTED if e.response.status_code in NO_WRITE_STATUSES
@@ -602,12 +521,10 @@ async def make_canvas_request(
                 except Exception as e:
                     log_error(f"Request failed for {sanitize_url(endpoint)}", error_type=type(e).__name__)
 
-                    # Audit: log request exception (type only — message may contain PII)
                     log_data_access(method, endpoint, "error", type(e).__name__)
 
                     return RequestFailure(f"Request failed: {str(e)}", WriteOutcome.MAY_HAVE_WRITTEN)
 
-            # Should never reach here, but just in case
             return {"error": "Max retries exceeded"}
     finally:
         if _close_client:
@@ -726,25 +643,18 @@ async def upload_file_to_storage(
 
     config = get_config()
 
-    # Create a separate client for external uploads (no auth header needed)
     async with httpx.AsyncClient(timeout=config.api_timeout) as client:
         try:
-            # Read the file content
             with open(file_path, 'rb') as f:
                 file_content = f.read()
 
-            # Build multipart form data
-            # upload_params contains required fields like 'key', 'Policy', 'Signature', etc.
             files = {
                 'file': (filename, file_content, content_type)
             }
 
-            # Log for debugging
             if config.log_api_requests:
                 log_debug(f"Uploading file to storage: {sanitize_url(upload_url)}", filename=filename, content_type=content_type, size=len(file_content))
 
-            # Make the upload request
-            # Note: follow_redirects=False because Canvas may return a 3xx with file info
             response = await client.post(
                 upload_url,
                 data=upload_params,
@@ -752,28 +662,18 @@ async def upload_file_to_storage(
                 follow_redirects=False
             )
 
-            # Canvas storage upload can return:
-            # - 200/201 with JSON body containing file info
-            # - 301/302/303 redirect to Canvas API with file info
             if response.status_code in (200, 201):
-                # Direct success response
                 try:
                     body: dict[str, Any] = response.json()
                     return body
                 except ValueError:
-                    # Some storage backends return empty success
                     return {"success": True, "status_code": response.status_code}
 
             elif response.status_code in (301, 302, 303):
-                # Redirect - follow it to get file info from Canvas
                 redirect_url = response.headers.get('Location')
                 if not redirect_url:
                     return {"error": "Redirect without Location header"}
 
-                # The Location comes from the storage host, not from Canvas, and
-                # the confirmation GET carries the student's Canvas session
-                # cookie. Only send it back to Canvas itself; anything else is
-                # refused before a request is made.
                 absolute = str(response.url.join(redirect_url))
                 if not is_canvas_origin(absolute):
                     return {
@@ -796,7 +696,6 @@ async def upload_file_to_storage(
                     return {"error": str(e)}
 
             else:
-                # Unexpected status
                 error_text = response.text
                 return {
                     "error": f"Storage upload failed with status {response.status_code}",
@@ -839,7 +738,6 @@ async def fetch_all_paginated_results(
             lose the single-anonymization-pass-over-the-complete-dataset
             property this function exists to provide.
     """
-    # Each caller owns its query and cursor, even if callers share input params.
     current_params = deepcopy(params) if params is not None else {}
     current_params.setdefault("per_page", DEFAULT_PAGE_SIZE)
     current_params["page"] = 1
@@ -870,11 +768,10 @@ async def fetch_all_paginated_results(
         if next_identity in seen:
             return {"error": "Pagination cycle detected; no partial result returned"}
         pagination["url"] = next_url
-        current_params = {}  # The opaque next URL contains the complete query.
+        current_params = {}
     else:
         return {"error": f"Pagination exceeded {MAX_PAGINATION_PAGES} pages; no partial result returned"}
 
-    # Apply anonymization to the complete result set if needed
     from .config import get_config
     config = get_config()
 

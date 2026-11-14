@@ -62,13 +62,8 @@ from ..core.untrusted_content import (
 from ..core.validation import coerce_canvas_id, validate_params
 from ..core.write_confirmation import ConfirmationGuard, unconfirmed_write_warning
 
-# Submission types this tool supports. Quiz and discussion types are absent by
-# design: quiz-taking is a separate academic-integrity decision behind its own
-# flag, and discussion participation already has dedicated tools.
 _SUPPORTED_TYPES = ("online_text_entry", "online_url", "online_upload")
 
-# /submissions has no API path for these: Canvas only accepts them from its own
-# recorder or annotation viewer. Saying so beats "invalid submission_type".
 _UNSUBMITTABLE_TYPES = {
     "media_recording": (
         "Canvas only accepts these from its own in-browser recorder, which the "
@@ -93,18 +88,11 @@ def _rejected_submission_type(submission_type: str) -> str:
         )
     return f"Error: submission_type must be one of {supported} (got '{submission_type}')"
 
-# These tools are self-scoped by a hard-coded "/submissions/self" path suffix. That
-# only holds while assignment_id cannot end the path early, so a non-numeric ID is
-# refused outright rather than passed to Canvas.
 _INVALID_ASSIGNMENT_ID = (
     "Error: assignment_id must be a numeric Canvas assignment ID. "
     "Use list_assignments to find it."
 )
 
-# Whole-request upload bounds. These exist on top of the per-file limit in
-# core/file_validation, which on its own would allow an unlimited number of
-# maximum-size files in a single call. Both are checked before any file content
-# is decoded or read.
 _MAX_UPLOAD_FILES = 20
 _MAX_TOTAL_UPLOAD_BYTES = DEFAULT_MAX_FILE_SIZE_BYTES
 
@@ -116,18 +104,13 @@ def _too_large_message() -> str:
         "submission. Submit fewer or smaller files, or upload them in Canvas."
     )
 
-# How long a confirmation token stays valid. Long enough for a human to read a
-# preview and answer, short enough that course state cannot drift far.
 _CONFIRM_TTL_SECONDS = 300
 
-# Reuse the shared per-process nonce, mismatch-burn and monotonic token clock.
-# A second guard below deduplicates identical payload/attempt fingerprints even
-# across fresh preview tokens. Neither guard is shared across workers.
 _SUBMISSION_GUARD = ConfirmationGuard(
     ttl_seconds=_CONFIRM_TTL_SECONDS, nothing_done="Nothing was submitted."
 )
-_redeemed: dict[str, float] = {}  # fingerprint -> monotonic retention deadline
-_active: set[str] = set()  # claims cannot expire while their owner is awaiting I/O
+_redeemed: dict[str, float] = {}
+_active: set[str] = set()
 
 
 def reset_pending_confirmations() -> None:
@@ -369,10 +352,6 @@ def _prepare_files(
     """
     prepared: list[_PreparedFile] = []
 
-    # Bound the whole request, not just each file. A per-file cap alone lets a
-    # caller send an unlimited NUMBER of maximum-size files, and the preview
-    # decodes and holds them all before any confirmation is required, so one
-    # authenticated request could exhaust a shared server's memory.
     total_files = len(file_paths or []) + len(file_contents or [])
     if total_files > _MAX_UPLOAD_FILES:
         return [], (
@@ -415,8 +394,6 @@ def _prepare_files(
         if not name or not encoded:
             return [], "Error: each file_contents entry needs 'name' and 'content_base64'"
 
-        # Bound sizes BEFORE decoding, so an oversized request is rejected
-        # without ever allocating the buffer it describes.
         encoded = encoded.strip()
         approx_size = _decoded_size(encoded)
         if approx_size > DEFAULT_MAX_FILE_SIZE_BYTES:
@@ -430,10 +407,6 @@ def _prepare_files(
         except (binascii.Error, ValueError):
             return [], f"❌ '{name}' is not valid base64."
 
-        # Validate the name the CLIENT actually supplied. An earlier version
-        # checked a temp file's random basename instead, which meant the
-        # sanitized result was discarded and a name like "../essay.pdf" reached
-        # Canvas untouched.
         safe_name, name_error = _check_submission_name(name, allowed_extensions)
         if name_error:
             return [], name_error
@@ -468,9 +441,6 @@ async def _final_preflight(
     If the state cannot be re-read, that counts as changed. Proceeding would mean
     submitting without the guarantee the student was promised.
     """
-    # The instructor may have revoked agent writes while uploads were running,
-    # and the earlier grant may have been served from a cache that has since
-    # expired. The authoritative check is the last one before the write.
     allowed, reason = await check_student_write_allowed(course_id, "submit_assignment")
     if not allowed:
         return f"❌ Submission blocked. {reason}"
@@ -492,9 +462,6 @@ async def _final_preflight(
             "nothing was submitted. Try again shortly."
         )
 
-    # The assignment may have become a group assignment in the meantime, which
-    # the tool refuses outright: submitting would bind classmates who never
-    # agreed to it and spend a shared attempt.
     if assignment.get("group_category_id"):
         return (
             "❌ This became a group assignment while the submission was being "
@@ -545,10 +512,6 @@ async def _upload_one(
     if not upload_url:
         return None, f"❌ Canvas returned no upload URL for '{prepared.name}'."
 
-    # Step 2 writes the bytes through a temp file, because the storage helper
-    # takes a path. The bytes are passed through verbatim: no decoding, no
-    # transcoding, no content inspection, no OCR. Whether they are a JPEG, a
-    # PDF or a zip is not this server's business.
     handle_fd, temp_path = tempfile.mkstemp()
     try:
         with os.fdopen(handle_fd, "wb") as handle:
@@ -566,10 +529,6 @@ async def _upload_one(
     if isinstance(stored, dict) and "error" in stored:
         return None, f"❌ Upload failed for '{prepared.name}': {stored['error']}"
 
-    # Canvas storage answers in more than one shape. A 200/201 whose body is
-    # empty or non-JSON yields {"success": true} with no id, and a redirect
-    # confirmation can nest the file under "attachment". Check each documented
-    # shape before concluding the upload produced nothing usable.
     file_id = (
         stored.get("id")
         or (stored.get("attachment") or {}).get("id")
@@ -626,8 +585,6 @@ def register_student_write_tools(mcp: FastMCP) -> None:
 
         assignment = submission.get("assignment") or {}
         lines = [
-            # Assignment name and submission comments are author-controlled
-            # (teacher/peer feedback) — fenced (issue 239).
             f"Submission for: {fence_untrusted_inline(assignment.get('name', f'Assignment {assignment_id}'), 'assignment name')}",
             f"Status: {submission.get('workflow_state', 'unsubmitted')}",
         ]
@@ -718,14 +675,10 @@ def register_student_write_tools(mcp: FastMCP) -> None:
             if not allowed:
                 return f"❌ Submission blocked. {reason}"
 
-            # Backstop for issue 239: never publish our provenance markers into
-            # a submission body or its comment.
             if contains_fence_markers(body or "") or contains_fence_markers(comment or ""):
                 return FENCE_LEAK_ERROR
 
             if from_draft:
-                # Submit what the student already reviewed on disk, not a
-                # re-typed copy: save_assignment_draft -> read -> submit.
                 if submission_type != "online_text_entry":
                     return "Error: from_draft only applies to online_text_entry submissions."
                 draft = student_store.read_draft(course_id, assignment_id)
@@ -749,9 +702,6 @@ def register_student_write_tools(mcp: FastMCP) -> None:
             if isinstance(assignment, dict) and "error" in assignment:
                 return f"Error fetching assignment: {assignment['error']}"
 
-            # A group submission becomes the whole group's submission and
-            # consumes a shared attempt, affecting students who never consented.
-            # That needs its own decision, so Tier 1 declines rather than guess.
             if assignment.get("group_category_id"):
                 return (
                     "❌ This is a group assignment. Agent-assisted submission is "
@@ -769,10 +719,6 @@ def register_student_write_tools(mcp: FastMCP) -> None:
                 "get",
                 f"/courses/{course_id}/assignments/{assignment_id}/submissions/self",
             )
-            # Attempt state is not optional context here: it is what the preview
-            # reports and what the confirmation commits to. Substituting zero on
-            # a failed read would show the student a false attempt count and
-            # make the drift check vacuous, so stop instead.
             if not isinstance(submission, dict) or "error" in submission:
                 detail = (
                     submission.get("error")
@@ -821,10 +767,6 @@ def register_student_write_tools(mcp: FastMCP) -> None:
                 preview.append("")
 
                 if submission_type == "online_text_entry":
-                    # Shown in full, deliberately. The token authorizes the whole
-                    # body, so truncating here would ask the student to confirm
-                    # text they were never shown — which is exactly the thing
-                    # this preview exists to prevent.
                     text = body or ""
                     preview.append(f"Content ({len(text)} chars):\n{text}")
                 elif submission_type == "online_url":
@@ -848,12 +790,6 @@ def register_student_write_tools(mcp: FastMCP) -> None:
             if token_error:
                 return token_error
 
-            # Claim the confirmation BEFORE any awaited work. File uploads sit
-            # between here and the submit call, so two overlapping confirmations
-            # could otherwise both pass validation during those uploads and both
-            # submit, spending two attempts. Reserving first makes that
-            # impossible; every path that ends without submitting releases it
-            # again, so a failed upload still does not cost a fresh preview.
             if not _reserve_confirmation(fingerprint, confirmation_token):
                 return (
                     "❌ That confirmation was already used. Nothing was "
@@ -861,8 +797,6 @@ def register_student_write_tools(mcp: FastMCP) -> None:
                 )
 
             try:
-                # Re-check policy at the moment of the write, so an instructor's
-                # change between preview and confirm takes effect.
                 allowed, reason = await check_student_write_allowed(
                     course_id, "submit_assignment"
                 )
@@ -882,8 +816,6 @@ def register_student_write_tools(mcp: FastMCP) -> None:
                             course_id, str(assignment_id), item
                         )
                         if upload_error:
-                            # Release the claim: nothing was submitted, so the
-                            # student can retry without re-previewing.
                             _release_confirmation(fingerprint, confirmation_token)
                             return f"{upload_error}\nNothing was submitted."
                         file_ids.append(file_id)
@@ -894,10 +826,6 @@ def register_student_write_tools(mcp: FastMCP) -> None:
 
                 assert_no_identity_override(data)
 
-                # Re-verify every precondition immediately before the write. See
-                # _final_preflight: arbitrary time has passed since the earlier
-                # checks, so policy, group status and attempt state are all rechecked
-                # rather than trusted.
                 preflight_error = await _final_preflight(
                     course_id, str(assignment_id), submission_type, digest, fingerprint
                 )
@@ -905,10 +833,6 @@ def register_student_write_tools(mcp: FastMCP) -> None:
                     _release_confirmation(fingerprint, confirmation_token)
                     return preflight_error
 
-                # The claim taken above stands from here on. Even if this call
-                # errors, the token is not released: Canvas may have accepted the
-                # submission and only lost the reply, and a blind retry would spend
-                # a second attempt.
                 response = await make_canvas_request(
                     "post",
                     f"/courses/{course_id}/assignments/{assignment_id}/submissions",
@@ -953,7 +877,6 @@ def register_student_write_tools(mcp: FastMCP) -> None:
             if not comment.strip():
                 return "Error: comment cannot be empty"
 
-            # Backstop for issue 239: never publish our provenance markers.
             if contains_fence_markers(comment):
                 return FENCE_LEAK_ERROR
 
@@ -1016,10 +939,6 @@ def register_student_write_tools(mcp: FastMCP) -> None:
                 f"/courses/{course_id}/modules/{module_id}/items/{item_id}"
             )
 
-            # The /done PUT only has a visible effect on items whose
-            # completion requirement is must_mark_done; for anything else
-            # Canvas accepts the request and changes nothing (#221), so a
-            # bare 200 is not evidence the item was marked.
             item = await make_canvas_request("get", item_endpoint)
             if not isinstance(item, dict) or "error" in item:
                 detail = item.get("error") if isinstance(item, dict) else item
@@ -1049,7 +968,6 @@ def register_student_write_tools(mcp: FastMCP) -> None:
             if isinstance(response, dict) and "error" in response:
                 return f"❌ Could not mark item done: {response['error']}"
 
-            # Confirm the write actually landed before claiming success.
             after = await make_canvas_request("get", item_endpoint)
             if isinstance(after, dict) and "error" in after:
                 return (

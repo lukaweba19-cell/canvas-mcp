@@ -15,21 +15,10 @@ from ..core.validation import validate_params
 
 DetailLevel = Literal["names", "signatures", "full"]
 
-# Bumped from the unversioned (schema_version-less) shape to 2 when the
-# response gained mcp_tools/code_execution_api sections and the top-level
-# "tools" key was removed (issue #281). Scripted consumers should branch on
-# this field rather than assume the old flat {query, detail_level, count,
-# tools: [...]} shape.
 _SCHEMA_VERSION = 2
 
-# Cap on how much of an MCP tool's description is echoed back at
-# detail_level="full", so a query that matches many tools can't blow up
-# the response size with full multi-paragraph docstrings.
 _MCP_FULL_DESCRIPTION_CHARS = 400
 
-# Same idea for "signatures" mode: a tool's first docstring line is usually
-# short, but nothing enforces that — cap it so one verbose tool can't
-# dominate the response.
 _MCP_SIGNATURE_DESCRIPTION_CHARS = 200
 
 _TRUNCATION_SENTINEL = "... [truncated]"

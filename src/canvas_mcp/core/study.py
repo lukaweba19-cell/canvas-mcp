@@ -10,8 +10,6 @@ from __future__ import annotations
 import re
 import statistics
 
-# Sections a guide needs to be revisable rather than merely long. Missing ones
-# are reported, never fatal: a short reading guide legitimately skips some.
 REQUIRED_SECTIONS = (
     "what's on it",
     "key",
@@ -20,8 +18,6 @@ REQUIRED_SECTIONS = (
     "source",
 )
 
-# Phrases that make prose read as generated rather than written. Kept to
-# unambiguous offenders so the check is useful instead of noisy.
 STOCK_PHRASES = (
     "it is important to note",
     "it is worth noting",

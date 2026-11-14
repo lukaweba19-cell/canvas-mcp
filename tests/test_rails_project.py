@@ -42,7 +42,6 @@ def test_routes_cover_resources_nesting_namespace_scope_and_members():
     assert "GET /api/grades -> grades#index" in routes
     assert "GET /health -> health#show" in routes
     assert "MOUNT /sidekiq -> Sidekiq::Web" in routes
-    # only: [:index, :show] must not invent create/destroy for lessons.
     assert "lessons#create" not in routes
     assert "lessons#destroy" not in routes
 

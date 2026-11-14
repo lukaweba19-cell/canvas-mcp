@@ -68,8 +68,6 @@ def skills_root() -> Path | None:
     configured = os.environ.get("CANVAS_SKILLS_DIR")
     if configured:
         candidates.append(Path(configured).expanduser())
-    # A git checkout keeps them at the repo root; a wheel carries a copy inside
-    # the package (hatch force-include).
     candidates.append(Path(__file__).resolve().parents[2] / "skills")
     candidates.append(Path(str(importlib.resources.files("canvas_mcp"))) / "skills")
     for candidate in candidates:
@@ -87,8 +85,6 @@ def create_server() -> FastMCP:
     config = get_config()
     mcp = FastMCP(name=config.mcp_server_name)
 
-    # The skills travel with the package and are exposed over MCP, so the model
-    # gets its workflows without the user copying files into a client folder.
     skills = skills_root()
     if skills is None:
         log_error(
@@ -105,7 +101,6 @@ def register_all_tools(mcp: FastMCP) -> None:
     log_info("Registering Canvas student MCP tools...")
     install_tool_result_contract(mcp)
 
-    # Shared reads a student needs to do coursework.
     register_course_tools(mcp)
     register_shared_content_tools(mcp)
     register_shared_assignment_tools(mcp)
@@ -119,13 +114,10 @@ def register_all_tools(mcp: FastMCP) -> None:
     register_discovery_tools(mcp)
     register_self_identity_tools(mcp)
 
-    # Student-specific reads, plus the write tools the operator enables.
     register_student_tools(mcp)
     register_student_insight_tools(mcp)
     register_student_write_tools(mcp)
 
-    # Course material extraction (PDF, slides, Word), study guides, and the
-    # local workspace for drafts, notes, journal and voice.
     register_material_tools(mcp)
     register_study_tools(mcp)
     register_workspace_tools(mcp)
@@ -223,8 +215,6 @@ def main() -> None:
 
     config = get_config()
 
-    # Credentials are a Canvas browser session, not a token. No tool needs a
-    # token in either transport; the session is captured on first use.
     if not config.canvas_api_url:
         log_error("CANVAS_API_URL is required (e.g. https://school.instructure.com/api/v1)")
         log_error("Use the env.template file as a reference")
@@ -240,7 +230,6 @@ def main() -> None:
         )
         sys.exit(1)
 
-    # Handle special commands
     if args.config:
         print("Canvas MCP Server Configuration:", file=sys.stderr)
         print(f"  Server Name: {config.mcp_server_name}", file=sys.stderr)
@@ -272,11 +261,9 @@ def main() -> None:
             log_error("Connection test failed!")
             sys.exit(1)
 
-    # Initialize audit logging (before any API calls)
     from .core.audit import init_audit_logging
     init_audit_logging()
 
-    # Normal server startup
     if is_http:
         log_info(
             f"Starting Canvas MCP server in HTTP mode on {args.host}:{args.port}"
@@ -291,8 +278,6 @@ def main() -> None:
     if config.institution_name:
         log_info(f"Institution: {config.institution_name}")
 
-    # Report session state without blocking startup: the first Canvas call
-    # captures a session (opening Chrome only when nothing is stored).
     try:
         from .core.session import load_session
 
@@ -309,7 +294,6 @@ def main() -> None:
 
     log_info("Use Ctrl+C to stop the server")
 
-    # Create and configure server
     mcp = create_server()
     register_all_tools(mcp)
 

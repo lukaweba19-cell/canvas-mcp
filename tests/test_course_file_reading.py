@@ -34,7 +34,6 @@ DECK = build_pptx(
         {"text": "Dijkstra relaxes edges"},
     ]
 )
-# A lecture deck exported to PDF: every page landscape, labeled per slide.
 SLIDE_DECK = build_slide_pdf(
     [
         "Slide body 1 " + "alpha " * 60,
@@ -50,13 +49,10 @@ _PROSE = (
     "The quarterly report reviews staffing, budgets, timelines and risks for "
     "each regional office, and records the decisions the committee made."
 )
-# Landscape letter pages of prose: the shape of a deck, the text of a document.
 LANDSCAPE_PROSE = build_landscape_prose_pdf(
     [f"Page {n}. " + _PROSE * 14 for n in range(1, 7)]
 )
 
-# Alternating long/short pages: p.2 is the first that cannot fit in 1000 chars,
-# and p.3/p.5 would fit afterwards, so a skip-and-resume cut would show them.
 LONG = build_text_pdf(
     [
         "Page 1 " + "alpha " * 60,
@@ -71,7 +67,7 @@ LONG = build_text_pdf(
 class _FileHandler(BaseHTTPRequestHandler):
     files: dict[str, bytes] = {}
 
-    def do_GET(self):  # noqa: N802 - stdlib handler naming
+    def do_GET(self):
         data = self.files.get(self.path)
         if data is None:
             self.send_error(404)
@@ -82,7 +78,7 @@ class _FileHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
-    def log_message(self, *args):  # keep pytest output clean
+    def log_message(self, *args):
         pass
 
 
@@ -133,7 +129,6 @@ async def test_full_text_pdf_is_downloaded_and_read(canvas, file_server, mcp):
     assert "Depth first search explores one branch fully." in text
     assert "Breadth first search uses a queue." in text
     assert "## p.1" in text
-    # The bytes really came over HTTP from the local server.
     assert canvas.calls_to("get", "/courses/225/files/501")
 
 
@@ -181,12 +176,9 @@ async def test_full_text_stops_at_the_budget_and_names_the_next_call(
     shown = [n for n in range(1, 6) if f"Page {n} " in text]
     hidden = [n for n in range(1, 6) if f"Page {n} " not in text]
     assert shown == [1], text
-    # The cut is where reading stops: later pages that happen to be short must
-    # not be pulled in behind the first page that did not fit.
     assert hidden == [2, 3, 4, 5], text
     assert "## p.1" in text and "## p.2" not in text
 
-    # The trailing note must state the exact number of sections left unread.
     assert "[stopped after " in text
     assert "4 more section(s) not shown" in text, text
     assert "starting at 'p.2'" in text
@@ -212,7 +204,6 @@ async def test_pdf_deck_is_read_slide_by_slide_with_the_budget_cut(canvas, file_
     assert hidden == [2, 3, 4, 5], text
     assert "## Slide 1" in text
     assert "p.1" not in text, "a deck must be labeled by slide, not by page"
-    # The cut note names the unread slides and how many there are.
     assert "4 more section(s) not shown" in text
     assert "starting at 'Slide 2'" in text
 

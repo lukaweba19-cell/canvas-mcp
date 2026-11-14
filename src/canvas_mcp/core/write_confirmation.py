@@ -64,25 +64,14 @@ class ConfirmationGuard:
     confirmation just means previewing again.
     """
 
-    # A token is ``expiry.nonce.authmac.fpmac`` — all fixed-width hex/int, so a
-    # legitimate token is well under this. Anything longer is rejected before
-    # any hashing (cheap flood defense).
     _MAX_TOKEN_LEN = 256
 
     def __init__(self, ttl_seconds: int = 300, nothing_done: str = "Nothing was sent.") -> None:
         self._ttl = ttl_seconds
-        # Wording for "the guarded action did not happen" — "sent" for the
-        # messaging tools, "deleted" for the delete tools (#318).
         self.nothing_done = nothing_done
         self._secret = secrets.token_bytes(32)
-        # token nonce -> when its claim can be forgotten. Keyed by nonce, not
-        # fingerprint, so redeeming one token does not block a *fresh* preview
-        # of identical content — each preview mints its own single-use token.
         self._redeemed: dict[str, float] = {}
-        # A mismatch is terminal, including when another request owns the
-        # reservation and later releases it after a definite rejection.
         self._burned: set[str] = set()
-        # None marks a finished, spent owning claim; legacy release cannot free it.
         self._claims: dict[str, ConfirmationClaim | None] = {}
         self._last_now = float("-inf")
         self._last_monotonic = time.monotonic()
@@ -181,7 +170,6 @@ class ConfirmationGuard:
             return "❌ That confirmation token is malformed. Run the preview again."
         expiry, nonce, authmac, fpmac = parsed
 
-        # Authenticator first: proves we issued it (and is what reserve checks).
         if not hmac.compare_digest(authmac, self._auth_mac(expiry, nonce)):
             return "❌ That confirmation token is malformed. Run the preview again."
         now = self._now()
@@ -223,8 +211,6 @@ class ConfirmationGuard:
         which is exactly its remaining valid lifetime. No ``await`` between the
         membership test and the write keeps it atomic on the event loop.
         """
-        # Authentication and cleanup must use one sample: a second sample
-        # could expire and remove an existing claim AFTER authentication.
         now = self._now()
         authed = self._authenticate(token, now)
         if authed is None:
@@ -245,7 +231,7 @@ class ConfirmationGuard:
             return (f"❌ That confirmation was already used. {self.nothing_done} "
                     "Run the preview again.")
         parsed = self._parse(token)
-        assert parsed is not None  # reserve authenticated this same token
+        assert parsed is not None
         claim = ConfirmationClaim(self, parsed[1])
         self._claims[parsed[1]] = claim
         return claim
@@ -253,7 +239,6 @@ class ConfirmationGuard:
     def _finish_claim(self, claim: ConfirmationClaim, outcome: WriteOutcome) -> bool:
         if self._claims.get(claim._nonce) is not claim:
             return False
-        # Finishing is single-use even when the outcome is uncertain or burned.
         self._claims[claim._nonce] = None
         if (claim._nonce in self._burned or
                 outcome not in (WriteOutcome.NOT_DISPATCHED, WriteOutcome.REJECTED)):

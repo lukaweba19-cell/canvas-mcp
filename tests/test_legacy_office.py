@@ -7,7 +7,6 @@ import stat
 
 from fixtures import build_doc, build_legacy_office, build_pptx, build_xls
 from helpers import call
-from test_tool_reading_e2e import FILES, PAYLOADS, _line  # noqa: F401 - shared fixture
 
 from canvas_mcp.core import convert, extract
 

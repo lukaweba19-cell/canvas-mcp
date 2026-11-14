@@ -7,36 +7,29 @@ import sys
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
-# Configure logger for Canvas MCP
 logger = logging.getLogger("canvas_mcp")
 logger.setLevel(logging.INFO)
 
-# Create console handler with formatting
 handler = logging.StreamHandler(sys.stderr)
 handler.setLevel(logging.INFO)
 
-# Create formatter
 formatter = logging.Formatter(
     fmt='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S'
 )
 handler.setFormatter(formatter)
 
-# Add handler to logger
 logger.addHandler(handler)
 
-# PII keys that should be fully redacted in log context
 _PII_KEYS = frozenset({
     "user_id", "student_id", "email", "name", "login_id",
     "sis_user_id", "value",
 })
 
-# ID keys that should be truncated (show only last 4 chars)
 _ID_KEYS = frozenset({
     "course_id", "topic_id", "assignment_id", "entry_id", "submission_id",
 })
 
-# Regex to replace numeric path segments in URLs
 _NUMERIC_PATH_RE = re.compile(r"/\d+")
 
 

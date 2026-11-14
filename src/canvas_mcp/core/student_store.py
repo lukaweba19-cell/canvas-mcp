@@ -102,8 +102,6 @@ def find_assignment_dir(
         if found:
             return found[0]
 
-    # The folder may have been created under the course's other name. Accept a
-    # match from elsewhere only when it is unambiguous.
     elsewhere = sorted(
         path for path in root.glob(f"*/{prefix}-*") if path.is_dir()
     )
@@ -199,9 +197,6 @@ def write_text(path: Path, content: str) -> Path:
     return path
 
 
-# ---------------------------------------------------------------------------
-# Notes
-# ---------------------------------------------------------------------------
 
 
 def _front_matter(meta: dict[str, Any]) -> str:
@@ -316,9 +311,6 @@ def search_notes(
     return hits
 
 
-# ---------------------------------------------------------------------------
-# Drafts
-# ---------------------------------------------------------------------------
 
 
 def save_draft(
@@ -401,9 +393,6 @@ def read_draft(
     return {"path": str(target), "content": target.read_text(encoding="utf-8", errors="replace")}
 
 
-# ---------------------------------------------------------------------------
-# Work journal
-# ---------------------------------------------------------------------------
 
 
 def append_journal(entry: dict[str, Any]) -> dict[str, Any]:
@@ -428,9 +417,6 @@ def read_journal(limit: int = 50) -> list[dict[str, Any]]:
     return records
 
 
-# ---------------------------------------------------------------------------
-# Voice profile
-# ---------------------------------------------------------------------------
 
 
 def save_voice(markdown: str) -> Path:

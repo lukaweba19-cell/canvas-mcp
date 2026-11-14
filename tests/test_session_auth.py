@@ -51,8 +51,6 @@ def test_cookie_filter_keeps_only_the_canvas_host():
 
     kept = filter_cookies(cookies, "canvas.example.edu")
 
-    # Cookies for the Canvas host and for its parent school domain are sent to
-    # Canvas by the browser, so both are kept; anything from another site is not.
     assert kept == {"_canvas_session": "abc", "_csrf_token": "csrf", "sso": "other-school"}
     assert "SID" not in kept
 
@@ -87,7 +85,6 @@ def test_session_client_carries_cookie_and_csrf(canvas_session):
 
     assert dict(client.cookies)["_canvas_session"] == "abc"
     assert client.headers["X-CSRF-Token"] == "csrf-token"
-    # No bearer token may exist anywhere in this build.
     assert "Authorization" not in client.headers
 
 
@@ -164,8 +161,6 @@ def test_chrome_launch_uses_a_dedicated_profile_and_random_port(tmp_path):
     )
 
     assert "--remote-debugging-port=0" in args
-    # Chrome 136+ ignores debugging on the default profile, so a user-data-dir
-    # is mandatory rather than optional.
     assert any(arg.startswith("--user-data-dir=") for arg in args)
     assert any(str(tmp_path / "chrome-profile") in arg for arg in args)
 

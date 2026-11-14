@@ -53,9 +53,6 @@ _VIEW_RE = re.compile(
 )
 
 
-# ---------------------------------------------------------------------------
-# Archive access
-# ---------------------------------------------------------------------------
 
 
 def _is_rails_source(name: str, source: str) -> bool:
@@ -207,9 +204,6 @@ def describe_zip(
     return sections, warnings
 
 
-# ---------------------------------------------------------------------------
-# routes.rb
-# ---------------------------------------------------------------------------
 
 
 def _plural_param(name: str) -> str:
@@ -275,7 +269,6 @@ def parse_routes(source: str, max_lines: int = MAX_ROUTE_LINES) -> str:
             routes.append((method, re.sub(r"/{2,}", "/", path) or "/", target))
 
     for raw in source.splitlines():
-        # A '#' inside a quoted target is a controller separator, not a comment.
         line = (raw if _target_re_has_hash(raw) else raw.split("#", 1)[0]).strip()
         if not line:
             continue
@@ -307,9 +300,6 @@ def parse_routes(source: str, max_lines: int = MAX_ROUTE_LINES) -> str:
                 stack.append(
                     {
                         "kind": "resources",
-                        # Children use the parent's foreign-key param
-                        # (/courses/:course_id/lessons); the resource's own
-                        # member routes use :id.
                         "path": f"{collection_path}/:{_plural_param(name)}_id",
                         "own": f"{collection_path}/:{param}",
                         "collection": collection_path,
@@ -436,8 +426,6 @@ def parse_routes(source: str, max_lines: int = MAX_ROUTE_LINES) -> str:
             add(method, path or "/", controller_action)
             continue
 
-        # Any other `something do` block (concerns, constraints) still needs its
-        # `end` to pop, or every later route inherits its indentation.
         if re.search(r"\bdo\b\s*(\|[^|]*\|)?\s*$", line):
             stack.append({"kind": "block", "path": ""})
 
@@ -454,9 +442,6 @@ def _target_re_has_hash(raw: str) -> bool:
     return bool(re.search(r"[\"'][a-z_][\w/]*#[a-z_]\w*[\"']", raw))
 
 
-# ---------------------------------------------------------------------------
-# controllers, models, views
-# ---------------------------------------------------------------------------
 
 
 def _controller_name(relative: str, source: str) -> str:
@@ -541,9 +526,6 @@ def describe_views(paths: list[str]) -> str:
     return "\n".join(lines)
 
 
-# ---------------------------------------------------------------------------
-# schema.rb, migrations, config
-# ---------------------------------------------------------------------------
 
 
 def describe_schema(source: str, max_tables: int = MAX_TABLES) -> str:

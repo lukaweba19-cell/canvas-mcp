@@ -52,14 +52,12 @@ def register_shared_assignment_tools(mcp: FastMCP) -> None:
             due_at = assignment.get("due_at", "No due date")
             points = assignment.get("points_possible", 0)
 
-            # Assignment names are instructor-authored free text (issue 239).
             assignments_info.append(
                 f"ID: {assignment_id}\n"
                 f"Name: {fence_untrusted_inline(name, 'assignment name')}\n"
                 f"Due: {due_at}\nPoints: {points}\n"
             )
 
-        # Try to get the course code for display
         course_display = await get_course_code(course_id) or course_identifier
         return f"Assignments for Course {course_display}:\n\n" + "\n".join(assignments_info)
 
@@ -74,7 +72,6 @@ def register_shared_assignment_tools(mcp: FastMCP) -> None:
         """
         course_id = await get_course_id(course_identifier)
 
-        # Ensure assignment_id is a string
         assignment_id_str = str(assignment_id)
 
         response = await make_canvas_request(
@@ -84,8 +81,6 @@ def register_shared_assignment_tools(mcp: FastMCP) -> None:
         if "error" in response:
             return f"Error fetching assignment details: {response['error']}"
 
-        # Name and description are author-controlled; the description is full
-        # HTML that can carry paragraphs of injected directives (issue 239).
         details = [
             f"Name: {fence_untrusted_inline(response.get('name', 'N/A'), 'assignment name')}",
             "Description:\n"
@@ -97,7 +92,6 @@ def register_shared_assignment_tools(mcp: FastMCP) -> None:
             f"Locked: {response.get('locked_for_user', False)}"
         ]
 
-        # Try to get the course code for display
         course_display = await get_course_code(course_id) or course_identifier
         return f"Assignment Details for ID {assignment_id} in course {course_display}:\n\n" + "\n".join(details)
 

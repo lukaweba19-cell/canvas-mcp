@@ -49,54 +49,38 @@ from pypdf import PdfReader
 
 from . import convert, ocr, rails
 
-try:  # a hard dependency; a broken install must degrade to a clear message
+try:
     from legacy_doc import extract_text as _legacy_doc_text
-except Exception:  # pragma: no cover - only if the install is damaged
+except Exception:
     _legacy_doc_text = None
 
-# OOXML namespaces
 _A = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
 _W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 _X = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
 _R = "{http://schemas.openxmlformats.org/package/2006/relationships}"
 
-# Guard rails: Canvas permits very large files, and extraction buffers in memory.
 MAX_EXTRACT_BYTES = 60 * 1024 * 1024
 MAX_SECTION_CHARS = 40_000
 
-# OCR is slow, so a slide with a dozen decorative images must not turn one read
-# into minutes. Three images per slide covers the usual screenshot + diagram.
 _MAX_OCR_IMAGES_PER_SLIDE = 3
 _MAX_OCR_DOCX_IMAGES = 5
 
-# Telling a slide deck from a landscape handout takes two independent clues: the
-# pages must share one landscape, slide-shaped size, and the text must be sparse
-# enough to be slide bodies. Page shape alone would mislabel landscape reports.
-_SLIDE_ASPECT_RANGE = (1.2, 1.9)  # 4:3 = 1.33, 16:10 = 1.6, 16:9 = 1.78
-_SLIDE_PAGE_SIZE_TOLERANCE = 2.0  # PDF points: an exported deck repeats one box
+_SLIDE_ASPECT_RANGE = (1.2, 1.9)
+_SLIDE_PAGE_SIZE_TOLERANCE = 2.0
 _SLIDE_MEDIAN_WORDS_MAX = 150
 _SLIDE_MAX_WORDS = 250
 
 _READABLE_SUFFIXES = {
     ".pdf", ".pptx", ".pptm", ".docx", ".xlsx", ".xlsm", ".ipynb",
-    # Legacy Office formats the readers below handle directly or via LibreOffice.
     ".doc", ".xls", ".ppt",
-    # A course zip is read when it holds a Rails project.
     ".zip",
     ".html", ".htm", ".txt", ".md", ".markdown", ".csv", ".json",
     ".py", ".js", ".ts", ".java", ".c", ".cpp", ".rb", ".go", ".rs",
-    # Ruby/Rails course files: views, Rake tasks, gemspecs and rackups are source.
     ".erb", ".rake", ".gemspec", ".ru",
     ".sql", ".r", ".rmd", ".xml", ".yaml", ".yml", ".tex",
-    # Caption tracks and lecture transcripts: the readable form of a video.
     ".vtt", ".srt", ".webvtt",
 }
 
-# Legacy Office binaries (Word 97-2003 and friends) are OLE compound files.
-# .doc and .xls are read in process (legacy-doc, xlrd); .ppt is converted to
-# .pptx with a local LibreOffice, and says so plainly when it is not installed.
-# A legacy file that is really a modern one (a common mislabel) is read as its
-# real format.
 _LEGACY_OFFICE = {
     ".doc": (".docx", "Word 97-2003"),
     ".ppt": (".pptx", "PowerPoint 97-2003"),
@@ -111,8 +95,6 @@ _LEGACY_CONVERSION = (
 
 _TRANSCRIPT_SUFFIXES = {".vtt", ".srt", ".webvtt"}
 
-# Rails-era project files with no extension at all. A Canvas course on Rails
-# hands these over as downloads, and they are plain text like any other source.
 _TEXT_BASENAMES = frozenset(
     {"gemfile", "rakefile", "procfile", "capfile", "dockerfile"}
 )
@@ -207,9 +189,6 @@ def is_transcript(filename: str) -> bool:
     return Path(filename).suffix.lower() in _TRANSCRIPT_SUFFIXES
 
 
-# ---------------------------------------------------------------------------
-# Content status
-# ---------------------------------------------------------------------------
 
 _IMAGE_ONLY_WARNING = re.compile(
     r"no text layer|image-only|image only|no extractable text|"
@@ -239,7 +218,6 @@ _BINARY_HINT = (
     "Windows-1252), so it has no readable text."
 )
 
-# The word used in "NOT readable — <kind>: ..." for each reason.
 REASON_LABELS = {
     "image_only": "image-only",
     "empty": "empty",
@@ -265,10 +243,10 @@ class ContentStatus:
     """
 
     readable: bool
-    reason: str  # text | image_only | empty | unsupported | encoding | failed | not_read
+    reason: str
     detail: str
     words: int = 0
-    kind: str = ""  # overrides the REASON_LABELS word, e.g. for module items
+    kind: str = ""
 
     def label(self) -> str:
         if self.readable:
@@ -307,8 +285,6 @@ def status_from_parts(
 
     joined = " ".join(warnings)
     if _UNSUPPORTED_WARNING.search(joined):
-        # Keep the specific reason when the reader gave one (e.g. a zip with no
-        # Rails project), instead of a generic "audio, video, image or archive".
         detail = next(
             (warning for warning in warnings if _UNSUPPORTED_WARNING.search(warning)),
             _unsupported_detail(filename),
@@ -366,7 +342,6 @@ def status_for(filename: str, record: dict | None = None) -> ContentStatus:
 
     suffix = Path(filename).suffix.lower()
     if suffix == ".ppt" and convert.converter_path() is None:
-        # Be honest before the download: this one needs LibreOffice installed.
         return ContentStatus(
             False,
             "legacy_office",
@@ -381,9 +356,6 @@ def status_for(filename: str, record: dict | None = None) -> ContentStatus:
 
 
 
-# ---------------------------------------------------------------------------
-# HTML
-# ---------------------------------------------------------------------------
 
 _TAG_BLOCKS = re.compile(
     r"</\s*(p|div|li|tr|h[1-6]|section|article|blockquote|pre)\s*>", re.IGNORECASE
@@ -411,9 +383,6 @@ def html_to_text(body: str) -> str:
     return _MANY_BLANK.sub("\n\n", "\n".join(lines)).strip()
 
 
-# ---------------------------------------------------------------------------
-# OOXML helpers
-# ---------------------------------------------------------------------------
 
 
 def _paragraphs_text(root, namespace: str) -> str:
@@ -440,7 +409,6 @@ def _image_parts(archive: zipfile.ZipFile, rels_name: str, base: str) -> list[by
         target = str(relationship.get("Target", ""))
         if not target:
             continue
-        # Targets are relative ("../media/image1.png"); resolve against the part.
         candidate = target.lstrip("/")
         if target.startswith("../"):
             candidate = f"{base}/{target[3:]}"
@@ -484,7 +452,6 @@ def _extract_pptx(data: bytes) -> tuple[list[Section], list[str]]:
                 notes[int(match.group(1))] = name
 
         for index in sorted(slides):
-            # One unreadable slide must not cost the caller the other forty.
             try:
                 root = ElementTree.fromstring(archive.read(slides[index]))
                 body = _paragraphs_text(root, _A)
@@ -501,8 +468,6 @@ def _extract_pptx(data: bytes) -> tuple[list[Section], list[str]]:
                 except Exception:
                     pass
 
-            # A slide with no text is usually a screenshot or a diagram. OCR it
-            # rather than reporting an empty slide as if the deck said nothing.
             if not body.strip() and engine is not None:
                 slide_part = slides[index]
                 rels = slide_part.replace("ppt/slides/", "ppt/slides/_rels/") + ".rels"
@@ -584,7 +549,7 @@ def _extract_xlsx(data: bytes) -> tuple[list[Section], list[str]]:
             for item in shared_root.iter(_X + "si"):
                 shared.append("".join(node.text or "" for node in item.iter(_X + "t")))
         sheets = sorted(
-            (int(_SHEET_RE.match(name).group(1)), name)  # type: ignore[union-attr]
+            (int(_SHEET_RE.match(name).group(1)), name)
             for name in names
             if _SHEET_RE.match(name)
         )
@@ -634,7 +599,7 @@ def _extract_xls(data: bytes) -> tuple[list[Section], list[str]]:
 
 def _extract_doc(data: bytes) -> tuple[list[Section], list[str]]:
     """Word 97-2003 text, via legacy-doc's piece-table parser (no converter)."""
-    if _legacy_doc_text is None:  # pragma: no cover - dependency is required
+    if _legacy_doc_text is None:
         return [], [
             f"Reading legacy .doc needs the legacy-doc package. To read it, "
             f"{_LEGACY_CONVERSION}."
@@ -781,14 +746,12 @@ def _extract_pdf(data: bytes) -> tuple[list[Section], list[str]]:
     reader = PdfReader(io.BytesIO(data))
     pages = list(reader.pages)
 
-    # Text comes first: whether this is a deck depends on how the pages read, not
-    # only on their shape, so labels are chosen after the text is in hand.
     texts: list[str] = []
     unreadable: list[tuple[int, str]] = []
     for index, page in enumerate(pages, start=1):
         try:
             text = page.extract_text() or ""
-        except Exception as exc:  # a broken page must not lose the whole file
+        except Exception as exc:
             text = ""
             unreadable.append((index, type(exc).__name__))
         texts.append(re.sub(r"\n{3,}", "\n\n", text).strip())
@@ -818,8 +781,6 @@ def _extract_pdf(data: bytes) -> tuple[list[Section], list[str]]:
         )
         return sections, warnings
 
-    # OCR only the pages that need it, oldest-first, capped so a 300-page scan
-    # does not look like a hang. Overflow pages are reported, not dropped.
     targets = empty[: ocr.MAX_OCR_PAGES]
     numbers = [index + 1 for index in targets]
     try:
@@ -867,7 +828,7 @@ def _looks_binary(data: bytes) -> bool:
     if not sample:
         return False
     if sample.startswith((b"\xff\xfe", b"\xfe\xff")):
-        return False  # UTF-16 with a BOM is text
+        return False
     control = sum(1 for byte in sample if byte < 9 or 13 < byte < 32)
     return control / len(sample) > 0.05
 
@@ -888,9 +849,6 @@ def _decode_text(data: bytes) -> str | None:
     return None
 
 
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
 
 
 def extract_bytes(filename: str, data: bytes) -> Extracted:
@@ -899,8 +857,6 @@ def extract_bytes(filename: str, data: bytes) -> Extracted:
     suffix = Path(name).suffix.lower()
     kind = suffix.lstrip(".") or "unknown"
 
-    # The size guard comes first: legacy parsing and conversion buffer the file
-    # too, so an oversized .doc must be refused before any of it is decoded.
     if len(data) > MAX_EXTRACT_BYTES:
         return Extracted(
             name, kind,
@@ -913,7 +869,6 @@ def extract_bytes(filename: str, data: bytes) -> Extracted:
     if suffix in _LEGACY_OFFICE:
         modern_suffix, family = _LEGACY_OFFICE[suffix]
         if data.startswith(_ZIP_MAGIC):
-            # Mislabeled modern file: read it as what it really is.
             return extract_bytes(Path(name).with_suffix(modern_suffix).name, data)
         if data.startswith(_OLE_MAGIC):
             if suffix == ".xls":

@@ -22,10 +22,10 @@ FILES = [
 ]
 
 PAYLOADS = {
-    201: build_text_pdf(["", ""]),  # image-only
+    201: build_text_pdf(["", ""]),
     202: build_text_pdf(["Dijkstra's algorithm finds shortest paths in weighted graphs"]),
     203: b"   \n\n ",
-    204: b"\x00\x01\x02 binary bytes \x00\xff",  # not text at all
+    204: b"\x00\x01\x02 binary bytes \x00\xff",
     205: build_pptx([{"text": "Greedy choice property", "notes": "Proof sketch"}]),
 }
 
@@ -54,7 +54,6 @@ def course(canvas, monkeypatch):
             {**entry, "url": f"https://files.example/{entry['id']}"},
         )
 
-    # An assignment whose attachments are one image-only PDF and one real PDF.
     canvas.route(
         "get",
         "/courses/225/assignments/900",

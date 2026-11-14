@@ -81,7 +81,6 @@ async def test_content_map_marks_lti_and_offers_the_transcript(course, mcp):
 
     panopto = next(line for line in report.splitlines() if "Panopto" in line)
     assert "NOT readable" in panopto
-    # The item cannot be read, but a transcript does exist, so say which file.
     assert "file_id=901" in panopto
     assert "week3-lecture.vtt" in panopto
 
@@ -102,7 +101,6 @@ async def test_content_map_does_not_call_unread_files_readable(course, mcp):
     assert "NOT readable — unsupported format" in video
     assert "words extracted" not in video
 
-    # A PPTX was never extracted here, so it must not be called readable yet.
     slides = next(line for line in report.splitlines() if "Lecture 3.pptx" in line)
     assert "unread — extractable format" in slides
     assert "words extracted" not in slides

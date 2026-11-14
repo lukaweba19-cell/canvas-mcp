@@ -19,8 +19,6 @@ import io
 from dataclasses import dataclass
 from typing import Protocol
 
-# Bound the work: OCR is seconds per page, so an unbounded 400-page scan would
-# look like a hang. Pages past this limit are reported, not silently skipped.
 MAX_OCR_PAGES = 25
 
 INSTALL_HINT = (
@@ -75,7 +73,7 @@ class _RapidOcrBackend:
         from PIL import Image
 
         array = np.array(Image.open(io.BytesIO(image)).convert("RGB"))
-        result, _ = self.engine(array)  # type: ignore[operator]
+        result, _ = self.engine(array)
         if not result:
             return ""
         return "\n".join(str(line[1]) for line in result if len(line) > 1)
@@ -103,7 +101,7 @@ def _installed_backend() -> tuple[OcrBackend | None, str]:
         from rapidocr_onnxruntime import RapidOCR
 
         return _RapidOcrBackend(engine=RapidOCR()), ""
-    except Exception as exc:  # model files missing, onnxruntime broken, ...
+    except Exception as exc:
         return None, (
             "OCR is bundled with canvas-mcp but its engine did not load "
             f"({type(exc).__name__}: {exc}). " + INSTALL_HINT

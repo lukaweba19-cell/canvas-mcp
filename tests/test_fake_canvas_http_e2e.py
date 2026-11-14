@@ -263,12 +263,12 @@ class FakeState:
 class _CanvasHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
-    def log_message(self, *args) -> None:  # keep pytest output clean
+    def log_message(self, *args) -> None:
         pass
 
     @property
     def state(self) -> FakeState:
-        return self.server.state  # type: ignore[attr-defined]
+        return self.server.state
 
     def _headers(self) -> dict[str, str]:
         return {key.lower(): value for key, value in self.headers.items()}
@@ -313,7 +313,7 @@ class _CanvasHandler(BaseHTTPRequestHandler):
             and cookies.get("_canvas_session") == self.state.cookie
         )
 
-    def do_GET(self) -> None:  # noqa: N802 - stdlib handler naming
+    def do_GET(self) -> None:
         path = urlsplit(self.path).path
         query = parse_qs(urlsplit(self.path).query)
         self._record("GET", self.path)
@@ -606,7 +606,7 @@ class _CanvasHandler(BaseHTTPRequestHandler):
 
         self._json({"error": f"unhandled GET {path}"}, status=404)
 
-    def do_POST(self) -> None:  # noqa: N802 - stdlib handler naming
+    def do_POST(self) -> None:
         path = urlsplit(self.path).path
         headers = self._record("POST", self.path)
 
@@ -686,7 +686,7 @@ class _CanvasHandler(BaseHTTPRequestHandler):
 
         self._json({"error": f"unhandled POST {path}"}, status=404)
 
-    def do_PUT(self) -> None:  # noqa: N802 - stdlib handler naming
+    def do_PUT(self) -> None:
         path = urlsplit(self.path).path
         headers = self._record("PUT", self.path)
 
@@ -750,9 +750,9 @@ class _StorageHandler(BaseHTTPRequestHandler):
 
     @property
     def state(self) -> FakeState:
-        return self.server.state  # type: ignore[attr-defined]
+        return self.server.state
 
-    def do_GET(self) -> None:  # noqa: N802
+    def do_GET(self) -> None:
         path = urlsplit(self.path).path
         self.state.storage_cookies.append(self.headers.get("Cookie", ""))
         if path == "/blob/501":
@@ -766,13 +766,11 @@ class _StorageHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", "0")
         self.end_headers()
 
-    def do_POST(self) -> None:  # noqa: N802
+    def do_POST(self) -> None:
         self.state.storage_cookies.append(self.headers.get("Cookie", ""))
         length = int(self.headers.get("Content-Length", "0"))
         self.rfile.read(length)
         self.state.storage_uploads += 1
-        # Canvas storage normally redirects to a Canvas confirmation endpoint,
-        # which is the hop that must carry the session cookie and no CSRF.
         confirm = f"{self.state.canvas_base}/api/v1/files/900/confirm"
         self.send_response(303)
         self.send_header("Location", confirm)
@@ -782,7 +780,7 @@ class _StorageHandler(BaseHTTPRequestHandler):
 
 def _start(handler, state: FakeState):
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
-    server.state = state  # type: ignore[attr-defined]
+    server.state = state
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     return server, f"http://127.0.0.1:{server.server_address[1]}", thread
@@ -882,7 +880,6 @@ async def test_every_path_over_real_http_transport(tmp_path):
             async with ClientSession(read, write) as session:
                 await session.initialize()
 
-                # --- read + pagination -------------------------------------
                 listing = text_of(
                     await session.call_tool(
                         "list_assignments", {"course_identifier": 225}
@@ -891,7 +888,6 @@ async def test_every_path_over_real_http_transport(tmp_path):
                 assert "Short answer" in listing, listing
                 assert "Second page assignment" in listing, listing
 
-                # --- other read shapes: list, detail, overview, content map --
                 courses = text_of(await session.call_tool("list_courses", {}))
                 assert "CS225" in courses and "CS326" in courses, courses
 
@@ -924,7 +920,6 @@ async def test_every_path_over_real_http_transport(tmp_path):
                 )
                 assert "Encoding: base64" in direct, direct
 
-                # --- download via an off-host redirect ---------------------
                 material = text_of(
                     await session.call_tool(
                         "read_course_material",
@@ -938,7 +933,6 @@ async def test_every_path_over_real_http_transport(tmp_path):
                     cookie == "" for cookie in state.storage_cookies
                 ), state.storage_cookies
 
-                # --- write: text submission, preview then CSRF-protected POST
                 body = "Sessions are cookies, not bearer tokens."
                 preview = text_of(
                     await session.call_tool(
@@ -970,7 +964,6 @@ async def test_every_path_over_real_http_transport(tmp_path):
                     "online_text_entry"
                 ]
 
-                # --- write: file upload through storage ---------------------
                 encoded = base64.b64encode(b"A cookie session upload.").decode()
                 preview = text_of(
                     await session.call_tool(
@@ -1005,8 +998,6 @@ async def test_every_path_over_real_http_transport(tmp_path):
                 assert state.submissions[-1]["submission[file_ids][]"] == ["900"]
                 assert state.storage_cookies[-1] == ""
 
-                # Every Canvas call carried the session cookie; every write
-                # carried the CSRF token (the fake 403s otherwise).
                 assert state.requests, "no Canvas requests reached the fake"
                 assert all(
                     "_canvas_session=" in headers.get("cookie", "")
@@ -1025,7 +1016,6 @@ async def test_every_path_over_real_http_transport(tmp_path):
                     headers.get("x-csrf-token") == state.csrf for _, headers in writes
                 )
 
-                # --- expired session, then recovery ------------------------
                 state.reject = True
                 expired = text_of(
                     await session.call_tool(
@@ -1035,8 +1025,6 @@ async def test_every_path_over_real_http_transport(tmp_path):
                 assert "session expired" in expired.lower(), expired
                 assert "Chrome login window" in expired, expired
 
-                # The session is gone and no browser is allowed here: the next
-                # call must say so, not report an empty course.
                 blocked = text_of(
                     await session.call_tool(
                         "list_assignments", {"course_identifier": 225}
@@ -1045,7 +1033,6 @@ async def test_every_path_over_real_http_transport(tmp_path):
                 assert "No assignments found" not in blocked, blocked
                 assert "session" in blocked.lower(), blocked
 
-                # What a successful Chrome login writes: a fresh session file.
                 _write_session(
                     session_file, canvas_base + "/api/v1", "session-b", "csrf-b"
                 )
@@ -1057,8 +1044,6 @@ async def test_every_path_over_real_http_transport(tmp_path):
                 )
                 assert "Short answer" in recovered, recovered
 
-                # A file download is a separate path (redirect off Canvas). It
-                # must report the same expiry, not download the login page.
                 state.reject = True
                 download_expired = text_of(
                     await session.call_tool(
@@ -1089,9 +1074,6 @@ async def test_every_path_over_real_http_transport(tmp_path):
                 )
                 assert "Cookie sessions reach Canvas." in recovered_download
     finally:
-        # `uv run` wraps the server in a child process; on POSIX, terminate the
-        # whole group so no server outlives the test. Windows has no process
-        # groups here, so terminating the launcher is the available cleanup.
         if os.name == "nt":
             process.terminate()
             try:
@@ -1120,10 +1102,6 @@ async def test_every_path_over_real_http_transport(tmp_path):
             thread.join(timeout=5)
 
 
-#: Every tool the server registers, with arguments that drive it once. The
-#: registry test below reads tools/list from the running server and fails if
-#: this table and the registry disagree in either direction, so a new tool
-#: cannot be added without being exercised here.
 def _tool_calls(tmp_path: Path) -> dict[str, list[dict]]:
     download_dir = tmp_path / "downloads"
     download_dir.mkdir()
@@ -1264,7 +1242,6 @@ def _tool_calls(tmp_path: Path) -> dict[str, list[dict]]:
             }
         ],
         "check_draft_style": [{"text": "A clear and simple sentence about cookies."}],
-        # Quiz reading, then one full Classic attempt (flag is on in this test).
         "list_quizzes": [{}, {"course_identifier": 225}],
         "get_quiz_details": [{"course_identifier": 225, "quiz_id": 7}],
         "get_my_quiz_attempts": [{"course_identifier": 225, "quiz_id": 7}],
@@ -1294,8 +1271,6 @@ def _tool_calls(tmp_path: Path) -> dict[str, list[dict]]:
     }
 
 
-#: Tools that intentionally do not touch Canvas: they read or write the local
-#: student workspace. Everything else must produce at least one Canvas request.
 LOCAL_TOOLS = frozenset(
     {
         "search_canvas_tools",
@@ -1316,7 +1291,6 @@ LOCAL_TOOLS = frozenset(
         "get_my_handoff",
         "save_voice_sample",
         "check_draft_style",
-        # Uses the rubric saved to the workspace by get_my_assignment_rubric.
         "check_work_against_rubric",
     }
 )
@@ -1390,8 +1364,6 @@ async def test_every_registered_tool_over_real_http_transport(tmp_path):
                     f"unknown={sorted(set(calls) - registered)}"
                 )
 
-                # Some tools declare IDs as ``str`` only, so send identifiers
-                # as strings; Pydantic coerces them for the ``str | int`` tools.
                 id_keys = {
                     "course_identifier",
                     "assignment_id",
@@ -1439,8 +1411,6 @@ async def test_every_registered_tool_over_real_http_transport(tmp_path):
                     if name not in LOCAL_TOOLS:
                         assert made, f"{name} made no Canvas request"
 
-                # Quiz discovery: due dates, limits, attempts/scores, and a
-                # Planner-only item that the Classics listing never returns.
                 all_quizzes = outputs["list_quizzes"][0]
                 assert "Algebra check" in all_quizzes, all_quizzes
                 assert "Planner-only quiz" in all_quizzes, all_quizzes
@@ -1456,7 +1426,6 @@ async def test_every_registered_tool_over_real_http_transport(tmp_path):
                 attempts = outputs["get_my_quiz_attempts"][0]
                 assert "attempt 1" in attempts and "score 8" in attempts, attempts
 
-                # Full Classic attempt flow: start, save answers, submit.
                 started = outputs["start_quiz_attempt"][0]
                 assert "Quiz submission ID: 900" in started, started
                 assert "quiz-token" in started, started
@@ -1469,8 +1438,6 @@ async def test_every_registered_tool_over_real_http_transport(tmp_path):
                 assert "Score: 10" in outputs["submit_quiz_attempt"][0]
                 assert state.quiz_submitted
 
-                # Flag is on here, but New Quizzes has no student take API and
-                # must be refused rather than faked.
                 unsupported = text_of(
                     await session.call_tool(
                         "start_quiz_attempt",
@@ -1480,8 +1447,6 @@ async def test_every_registered_tool_over_real_http_transport(tmp_path):
                 assert "New Quizzes" in unsupported, unsupported
                 assert "does not expose" in unsupported, unsupported
 
-                # Every request in the sweep carried the session cookie and no
-                # bearer header; every write carried the exact CSRF token.
                 assert state.requests
                 for method, path, headers in state.requests:
                     if "/api/v1/" not in path:
@@ -1491,12 +1456,6 @@ async def test_every_registered_tool_over_real_http_transport(tmp_path):
                     if method in ("POST", "PUT", "DELETE", "PATCH"):
                         assert headers.get("x-csrf-token") == state.csrf, path
 
-                # An expired session must surface as the standard error on
-                # EVERY Canvas-backed tool, never as "no courses/files/…".
-                # Restore the stored session before each call (a real expired
-                # login leaves it on disk until the next 302 clears it), then
-                # reject it at the fake so the very first request is a login
-                # redirect.
                 state.reject = True
                 for name in calls:
                     if name in LOCAL_TOOLS:
@@ -1511,7 +1470,6 @@ async def test_every_registered_tool_over_real_http_transport(tmp_path):
                     assert "session expired" in text.lower(), f"{name}: {text}"
                 state.reject = False
 
-                # Downloads reached storage with no Canvas cookie.
                 assert state.storage_cookies
                 assert all(cookie == "" for cookie in state.storage_cookies)
     finally:

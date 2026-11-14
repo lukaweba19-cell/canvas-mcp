@@ -19,21 +19,17 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any
 
-# Separate logger for audit events (not the main application logger)
 _audit_logger = logging.getLogger("canvas_mcp.audit")
 _audit_logger.setLevel(logging.INFO)
-_audit_logger.propagate = False  # Don't propagate to root/parent loggers
+_audit_logger.propagate = False
 
-# Module-level flags (set by init_audit_logging)
 _access_events_enabled = False
 _execution_events_enabled = False
 _initialized = False
 
-# Regex to replace numeric path segments
 _NUMERIC_PATH_RE = re.compile(r"/\d+")
 
-# Audit log file settings
-_MAX_BYTES = 10 * 1024 * 1024  # 10 MB
+_MAX_BYTES = 10 * 1024 * 1024
 _BACKUP_COUNT = 5
 _AUDIT_FILENAME = "audit.jsonl"
 
@@ -67,13 +63,11 @@ def init_audit_logging() -> None:
         _initialized = True
         return
 
-    # Stderr handler — JSON lines to stderr
     stderr_handler = logging.StreamHandler(sys.stderr)
     stderr_handler.setLevel(logging.INFO)
     stderr_handler.setFormatter(logging.Formatter("%(message)s"))
     _audit_logger.addHandler(stderr_handler)
 
-    # File handler — rotating JSON lines file
     audit_dir_str = config.audit_log_dir
     if not audit_dir_str:
         audit_dir = Path.home() / ".canvas-mcp"
@@ -92,7 +86,6 @@ def init_audit_logging() -> None:
         file_handler.setFormatter(logging.Formatter("%(message)s"))
         _audit_logger.addHandler(file_handler)
     except OSError:
-        # If we can't write to the audit dir, log to stderr only
         print(
             f"Warning: Could not create audit log directory {audit_dir}. "
             "Audit events will be written to stderr only.",

@@ -28,8 +28,6 @@ from urllib.parse import urlparse
 
 from .logging import log_debug, log_warning
 
-#: Canvas prefixes JSON responses for cookie-authenticated requests with this
-#: guard so a <script> include cannot read them. json.loads chokes on it.
 XSSI_PREFIXES = ("while(1);", "while(1)", "{}&&", ")]}',")
 
 _CSRF_META = re.compile(
@@ -129,9 +127,6 @@ def extract_csrf_from_html(html: str) -> str:
     return match.group(1) if match else ""
 
 
-# ---------------------------------------------------------------------------
-# Storage
-# ---------------------------------------------------------------------------
 
 _cached: CanvasSession | None = None
 
@@ -166,7 +161,6 @@ def load_session(force: bool = False) -> CanvasSession | None:
         csrf=str(raw.get("csrf") or ""),
         saved_at=str(raw.get("saved_at") or ""),
     )
-    # A session captured for a different Canvas must never be used here.
     if session.host and _canvas_host() and session.host != _canvas_host():
         log_warning(
             "Stored Canvas session belongs to a different host; ignoring it",
@@ -204,7 +198,7 @@ def save_session(cookies: dict[str, str], csrf: str = "") -> CanvasSession:
         encoding="utf-8",
     )
     try:
-        os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)  # 0600
+        os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)
     except OSError:
         pass
     global _cached

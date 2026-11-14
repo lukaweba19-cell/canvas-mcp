@@ -30,14 +30,10 @@ class FakeCanvas:
 
     def __init__(self) -> None:
         self.calls: list[tuple[str, str]] = []
-        #: request bodies, so a test can prove WHAT was submitted, not just that
-        #: a POST happened.
         self.payloads: list[tuple[str, str, Any]] = []
         self._routes: list[tuple[str, str, Any]] = []
 
     def route(self, method: str, prefix: str, payload: Any) -> FakeCanvas:
-        # Later registrations replace earlier ones for the same endpoint, so a
-        # test can override a route its fixture already set up.
         self._routes = [
             existing
             for existing in self._routes
@@ -58,7 +54,6 @@ class FakeCanvas:
     ) -> Any:
         self.calls.append((method.upper(), endpoint))
         self.payloads.append((method.upper(), endpoint, kwargs.get("data")))
-        # Exact matches first: "/courses" must not swallow "/courses/225".
         for route_method, prefix, payload in self._routes:
             if route_method == method.upper() and endpoint == prefix:
                 return deepcopy(payload)
@@ -71,8 +66,6 @@ class FakeCanvas:
         return await self.request("get", endpoint, params)
 
 
-#: Tool modules that talk to Canvas directly. Patching the name in each module
-#: is what the running server actually resolves at call time.
 _CANVAS_MODULES = (
     "canvas_mcp.core.cache",
     "canvas_mcp.tools.materials",
@@ -100,8 +93,6 @@ def isolated_workspace(tmp_path, monkeypatch):
     """Fresh student directory, fresh caches, no confirmation state."""
     monkeypatch.setenv("CANVAS_STUDENT_DIR", str(tmp_path / "student"))
     monkeypatch.setenv("CANVAS_API_URL", "https://canvas.example.edu/api/v1")
-    # Authentication is a captured browser session, never a token. Tests write
-    # one so no Chrome window is ever attempted.
     session_file = tmp_path / "session.json"
     session_file.write_text(
         json.dumps(
@@ -147,7 +138,6 @@ def isolated_workspace(tmp_path, monkeypatch):
 def canvas(monkeypatch) -> FakeCanvas:
     """Route every Canvas call in every tool module through one fake."""
     fake = FakeCanvas()
-    # The course-list endpoint the code cache refreshes from: no courses.
     fake.route("get", "/courses", [])
     for name in _CANVAS_MODULES:
         module = importlib.import_module(name)

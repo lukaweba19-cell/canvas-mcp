@@ -22,13 +22,9 @@ FILES = [
 ]
 
 PAYLOADS = {
-    # Image-only: two pages with no text layer at all.
     101: build_text_pdf(["", ""]),
-    # Genuinely readable, with speaker notes.
     102: build_pptx([{"text": "Base case first", "notes": "Exam favourite"}]),
-    # Valid but empty.
     103: b"   \n\n  ",
-    # A format that has no text representation at all.
     104: b"\x00\x01binary",
 }
 
@@ -66,7 +62,6 @@ def _line(report: str, needle: str) -> str:
 async def test_image_only_pdf_is_never_reported_readable(course, blank_ocr, mcp):
     read = await call(mcp, "read_course_material", course_identifier=225, file_id=101)
 
-    # The extraction itself must state the real reason, not an empty success.
     assert "Status: NOT readable — image-only" in read
     assert "OCR ran but found no text" in read
     assert not _WORDS_EXTRACTED.search(read), "no readable claim without text"

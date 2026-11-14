@@ -74,7 +74,6 @@ def register_shared_module_tools(mcp: FastMCP) -> None:
             require_sequential = module.get("require_sequential_progress", False)
             prerequisite_ids = module.get("prerequisite_module_ids", [])
 
-            # Module names and item titles are instructor-authored (issue 239).
             result += f"**{fence_untrusted_inline(name, 'module name')}**\n"
             result += f"  ID: {module_id}\n"
             result += f"  Position: {position}\n"
@@ -88,12 +87,11 @@ def register_shared_module_tools(mcp: FastMCP) -> None:
             if prerequisite_ids:
                 result += f"  Prerequisites: {prerequisite_ids}\n"
 
-            # Include item summary if requested
             if include_items and "items" in module:
                 items = module.get("items", [])
                 if items:
                     result += "  Items:\n"
-                    for item in items[:5]:  # Show first 5 items
+                    for item in items[:5]:
                         item_title = item.get("title", "Untitled")
                         item_type = item.get("type", "Unknown")
                         result += f"    - {fence_untrusted_inline(item_title, 'module item title')} ({item_type})\n"
@@ -129,7 +127,6 @@ def register_shared_module_tools(mcp: FastMCP) -> None:
         if isinstance(modules, dict) and "error" in modules:
             return json.dumps({"error": f"Error fetching course structure: {modules['error']}"})
 
-        # Build structured output
         structured_modules = []
         total_items = 0
         unpublished_modules = 0
@@ -140,7 +137,6 @@ def register_shared_module_tools(mcp: FastMCP) -> None:
         for module in modules:
             module_published = module.get("published", False)
 
-            # Skip unpublished modules if not requested
             if not include_unpublished and not module_published:
                 continue
 
@@ -153,7 +149,6 @@ def register_shared_module_tools(mcp: FastMCP) -> None:
             for item in raw_items:
                 item_published = item.get("published", True)
 
-                # Skip unpublished items if not requested
                 if not include_unpublished and not item_published:
                     continue
 
@@ -167,8 +162,6 @@ def register_shared_module_tools(mcp: FastMCP) -> None:
                 filtered_items.append({
                     "id": item.get("id"),
                     "type": item_type,
-                    # Author-controlled titles fenced even in the JSON payload
-                    # (issue 239).
                     "title": fence_untrusted_inline(item.get("title", "Untitled"), "module item title"),
                     "published": item_published,
                     "position": item.get("position"),
@@ -178,7 +171,6 @@ def register_shared_module_tools(mcp: FastMCP) -> None:
                     "indent": item.get("indent", 0),
                 })
 
-            # Count empty modules (published modules with 0 items after filtering)
             if module_published and len(filtered_items) == 0:
                 empty_modules += 1
 

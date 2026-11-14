@@ -73,7 +73,6 @@ async def test_mcp_initialize_over_http(http_server):
 
     assert response.status_code == 200, response.text
     assert "protocolVersion" in response.text or "serverInfo" in response.text
-    # The HTTP endpoint holds no token; a bearer header is never required.
     assert "Authorization" not in response.request.headers
 
 

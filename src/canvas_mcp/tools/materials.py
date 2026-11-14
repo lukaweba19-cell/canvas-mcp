@@ -171,12 +171,10 @@ async def _download_course_file_bytes(download_url: str) -> tuple[bytes | None, 
     """Fetch a Canvas file's bytes using the student's captured session."""
     try:
         buffer = bytearray()
-        # The session stays on Canvas's origin; the storage redirect is followed
-        # without it (see iter_canvas_file_bytes).
         async for chunk in iter_canvas_file_bytes(download_url):
             buffer.extend(chunk)
         return bytes(buffer), None
-    except Exception as exc:  # network, auth, storage redirect
+    except Exception as exc:
         return None, f"{type(exc).__name__}: {exc}"
 
 
@@ -260,8 +258,6 @@ def _item_guidance(
                 f"for {_file_name(transcript)}",
             ).label()
         if item_type == "ExternalTool" and transcripts:
-            # No name match, but the course has transcripts: name them, so a
-            # differently-titled recording is still reachable.
             listed = "; ".join(
                 f"file_id={entry.get('id')} ({_file_name(entry)})"
                 for entry in transcripts[:6]
@@ -687,8 +683,6 @@ def render_extracted_text(
             "or raise max_chars.]"
         )
 
-    # A section with no text is dropped from the body; say which ones, so a
-    # screenshot slide inside a readable deck never disappears without a trace.
     untexted = [section.label for section in extracted.sections if not section.text.strip()]
     if untexted:
         listed = ", ".join(untexted[:10])
@@ -736,7 +730,6 @@ def _describe_cached(record: dict[str, Any], cache_path: str) -> str:
     toc_lines = extracted.toc(max_labels=_MAX_TOC_LINES).splitlines()
     lines.append("\nSections:")
     lines.extend(toc_lines)
-    # Name a label this file actually has: "Slide 3" is wrong for a p.N document.
     example = next(
         (section.label for section in extracted.sections if section.text.strip()),
         extracted.sections[0].label if extracted.sections else "1",

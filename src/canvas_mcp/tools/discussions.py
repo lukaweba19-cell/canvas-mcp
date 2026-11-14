@@ -21,26 +21,16 @@ from ..core.write_confirmation import (
     ConfirmationGuard,
 )
 
-# One guard per delete tool (#318); tokens are bound to the tool name, the
-# course, the exact target ids and the titles the preview displayed.
 _DELETE_ANNOUNCEMENT_GUARD = ConfirmationGuard(nothing_done="Nothing was deleted.")
 _BULK_DELETE_GUARD = ConfirmationGuard(nothing_done="Nothing was deleted.")
 _CRITERIA_DELETE_GUARD = ConfirmationGuard(nothing_done="Nothing was deleted.")
 
-# Issue #283: a permission error on create_announcement is not license to
-# post the same content as a discussion instead. Client models were doing
-# exactly that — a silent, unconfirmed write the user never asked for. This
-# text rides along with the error so the model sees the guardrail at the
-# moment it would otherwise reach for a fallback tool.
 ANNOUNCEMENT_PERMISSION_FALLBACK_WARNING = (
     "Do not attempt to post this content via discussion tools as a "
     "fallback; announcements require instructor/TA permissions in this "
     "course. Report this to the user instead."
 )
 
-# Substrings that show up in make_canvas_request's {"error": ...} payload
-# for an authorization failure (see core/client.py: "HTTP error: 401/403,
-# Details: {...}"), plus the Canvas API's own wording for the same failure.
 _PERMISSION_ERROR_MARKERS = (
     "HTTP error: 401",
     "HTTP error: 403",
@@ -58,7 +48,6 @@ def _is_permission_error(error_text: str) -> bool:
 def register_shared_discussion_tools(mcp: FastMCP) -> None:
     """Register discussion tools accessible to both students and educators."""
 
-    # ===== DISCUSSION TOOLS =====
 
     @mcp.tool(annotations=ToolAnnotations(read_only_hint=True))
     @validate_params
@@ -78,12 +67,6 @@ def register_shared_discussion_tools(mcp: FastMCP) -> None:
         """
         course_id = await get_course_id(course_identifier)
 
-        # Canvas serves discussions and announcements from the same endpoint but
-        # as disjoint sets: the index excludes announcements unless
-        # only_announcements=true, which then excludes ordinary discussions.
-        # There is no single query returning both, so combining requires two
-        # calls. (include[]=announcement is NOT a supported include value --
-        # Canvas silently ignores it. Issue #238.)
         topics = await fetch_all_paginated_results(
             f"/courses/{course_id}/discussion_topics", {"per_page": 100}
         )
@@ -97,8 +80,6 @@ def register_shared_discussion_tools(mcp: FastMCP) -> None:
                 {"only_announcements": True, "per_page": 100},
             )
             if isinstance(announcements, dict) and "error" in announcements:
-                # Announcements are commonly restricted separately; degrade to
-                # the discussions we did get rather than failing the whole call.
                 log_warning(
                     "list_discussion_topics: announcements unavailable",
                     course_id=course_id,
@@ -124,9 +105,6 @@ def register_shared_discussion_tools(mcp: FastMCP) -> None:
             topic_type = "Announcement" if is_announcement else "Discussion"
             status = "Published" if published else "Unpublished"
 
-            # Titles are author-controlled (students, where the course allows
-            # student topics) — fenced in listings too, not just detail views
-            # (issue 239).
             topics_info.append(
                 f"ID: {topic_id}\nType: {topic_type}\n"
                 f"Title:\n{fence_untrusted(title, 'discussion topic title')}\n"
@@ -150,9 +128,6 @@ def register_shared_discussion_tools(mcp: FastMCP) -> None:
         course_id = await get_course_id(course_identifier)
 
         params = {
-            # only_announcements is the filter Canvas honours. include[]=announcement
-            # is NOT a supported include value and is silently ignored (issue #238);
-            # measured identical result sets with and without it.
             "only_announcements": True,
             "per_page": 100
         }
@@ -171,8 +146,6 @@ def register_shared_discussion_tools(mcp: FastMCP) -> None:
             title = announcement.get("title", "Untitled announcement")
             posted_at = format_date(announcement.get("posted_at"))
 
-            # Titles are author-controlled (issue 239) — fenced in the
-            # announcement-only path too, not just list_discussion_topics.
             announcements_info.append(
                 f"ID: {announcement_id}\n"
                 f"Title:\n{fence_untrusted(title, 'announcement title')}\nPosted: {posted_at}\n"
@@ -200,7 +173,6 @@ def register_shared_discussion_tools(mcp: FastMCP) -> None:
         if "error" in response:
             return f"Error fetching discussion topic details: {response['error']}"
 
-        # Extract topic details
         title = response.get("title", "Untitled")
         message = response.get("message", "")
         is_announcement = response.get("is_announcement", False)
@@ -211,23 +183,18 @@ def register_shared_discussion_tools(mcp: FastMCP) -> None:
         created_at = format_date(response.get("created_at"))
         posted_at = format_date(response.get("posted_at"))
 
-        # Discussion statistics
         discussion_entries_count = response.get("discussion_entries_count", 0)
         unread_count = response.get("unread_count", 0)
         read_state = response.get("read_state", "unknown")
 
-        # Topic settings
         locked = response.get("locked", False)
         pinned = response.get("pinned", False)
         require_initial_post = response.get("require_initial_post", False)
 
-        # Format the output
         course_display = await get_course_code(course_id) or course_identifier
         topic_type = "Announcement" if is_announcement else "Discussion"
 
         result = f"{topic_type} Details for Course {course_display}:\n\n"
-        # Topic titles are author-controlled too (students, where the course
-        # allows student topics) — fenced like the body (issue 239).
         result += f"Title:\n{fence_untrusted(title, 'discussion topic title')}\n"
         result += f"ID: {topic_id}\n"
         result += f"Type: {topic_type}\n"
@@ -248,8 +215,6 @@ def register_shared_discussion_tools(mcp: FastMCP) -> None:
         result += f"Read State: {read_state.title()}\n"
 
         if message:
-            # Topic bodies are third-party text (issue 239): mark provenance
-            # so embedded directives read as data, not instructions.
             result += f"\nContent:\n{fence_untrusted(message, 'discussion topic body')}"
 
         return result
@@ -270,7 +235,6 @@ def register_shared_discussion_tools(mcp: FastMCP) -> None:
         """
         course_id = await get_course_id(course_identifier)
 
-        # Get basic entries first
         entries = await fetch_all_paginated_results(
             f"/courses/{course_id}/discussion_topics/{topic_id}/entries",
             {"per_page": 100}
@@ -282,12 +246,8 @@ def register_shared_discussion_tools(mcp: FastMCP) -> None:
         if not entries:
             return f"No discussion entries found for topic {topic_id}."
 
-        # Anonymization happens at the client layer (core/client.py) per
-        # ENABLE_DATA_ANONYMIZATION -- this endpoint matches _should_anonymize_endpoint (#179)
 
-        # Enhanced content fetching using multiple methods
         if include_full_content or include_replies:
-            # Method 1: Try to get everything from discussion view (most efficient)
             full_entries_map = {}
             try:
                 view_response = await make_canvas_request(
@@ -305,7 +265,6 @@ def register_shared_discussion_tools(mcp: FastMCP) -> None:
                     topic_id=topic_id
                 )
 
-            # Method 2: For entries not found in view, try entry_list endpoint
             missing_entry_ids = []
             for entry in entries:
                 entry_id = str(entry.get("id"))
@@ -331,7 +290,6 @@ def register_shared_discussion_tools(mcp: FastMCP) -> None:
                         missing_count=len(missing_entry_ids)
                     )
 
-        # Get topic details for context
         topic_response = await make_canvas_request(
             "get", f"/courses/{course_id}/discussion_topics/{topic_id}"
         )
@@ -340,7 +298,6 @@ def register_shared_discussion_tools(mcp: FastMCP) -> None:
         if "error" not in topic_response:
             topic_title = topic_response.get("title", "Unknown Topic")
 
-        # Format the output
         course_display = await get_course_code(course_id) or course_identifier
         entries_info = []
 
@@ -351,26 +308,20 @@ def register_shared_discussion_tools(mcp: FastMCP) -> None:
             user_name = entry.get("user_name", "Unknown user")
             created_at = format_date(entry.get("created_at"))
 
-            # Get message content
             if include_full_content and entry_id_str in full_entries_map:
-                # Use full content from enhanced fetch
                 full_entry = full_entries_map[entry_id_str]
                 message = full_entry.get("message", entry.get("message", ""))
             else:
-                # Use basic content from original entry
                 message = entry.get("message", "")
 
-            # Process message content
             import re
             if message:
                 if include_full_content:
-                    # For full content, clean HTML but keep the full text
                     message_display = re.sub(r'<[^>]+>', '', message)
                     message_display = message_display.strip()
                     if not message_display:
                         message_display = "[Content contains only HTML/formatting]"
                 else:
-                    # For preview, truncate as before
                     message_preview = re.sub(r'<[^>]+>', '', message)
                     if len(message_preview) > 300:
                         message_preview = message_preview[:300] + "..."
@@ -378,20 +329,16 @@ def register_shared_discussion_tools(mcp: FastMCP) -> None:
             else:
                 message_display = "[No content]"
 
-            # Handle replies
             replies_info = ""
             if include_replies:
                 replies: list[Any] | Any = []
 
-                # Try to get replies from enhanced fetch first
                 if entry_id_str in full_entries_map:
                     replies = full_entries_map[entry_id_str].get("replies", [])
 
-                # If no replies from enhanced fetch, try basic recent_replies
                 if not replies:
                     replies = entry.get("recent_replies", [])
 
-                # If still no replies or need more, try direct API call
                 has_more_replies = entry.get("has_more_replies", False)
                 if not replies or has_more_replies:
                     try:
@@ -418,7 +365,6 @@ def register_shared_discussion_tools(mcp: FastMCP) -> None:
                         reply_created = format_date(reply.get("created_at"))
                         reply_msg = reply.get("message", "")
 
-                        # Clean reply message
                         if reply_msg:
                             reply_clean = re.sub(r'<[^>]+>', '', reply_msg)
                             if len(reply_clean) > 200:
@@ -434,7 +380,6 @@ def register_shared_discussion_tools(mcp: FastMCP) -> None:
                 else:
                     replies_info = "\n  No replies found.\n"
             else:
-                # Just show reply count without fetching
                 recent_replies = entry.get("recent_replies", [])
                 has_more_replies = entry.get("has_more_replies", False)
                 total_replies = len(recent_replies)
@@ -447,13 +392,10 @@ def register_shared_discussion_tools(mcp: FastMCP) -> None:
 
                 replies_info = f"\n  Replies: {total_replies_text}"
 
-            # Build entry info
             entry_info = f"Entry ID: {entry_id}\n"
             entry_info += f"Author: {fence_untrusted_inline(user_name, 'author name')} (ID: {user_id})\n"
             entry_info += f"Posted: {created_at}{replies_info}\n"
 
-            # Entry bodies are student-authored (issue 239): fence them so the
-            # model reads them as data with visible provenance.
             fenced_message = fence_untrusted(
                 message_display, "discussion entry by a course participant"
             )
@@ -464,7 +406,6 @@ def register_shared_discussion_tools(mcp: FastMCP) -> None:
 
             entries_info.append(entry_info)
 
-        # Add helpful footer information
         footer = ""
         if not include_full_content:
             footer += "\n💡 Tip: Use include_full_content=True to get complete post content in one call"
@@ -494,26 +435,18 @@ def register_shared_discussion_tools(mcp: FastMCP) -> None:
         """
         course_id = await get_course_id(course_identifier)
 
-        # Method 1: Try to get entry details from the discussion view endpoint
         entry_response = None
         replies: list[Any] | Any = []
-        # A failed read is not the same as an entry that does not exist. Keep
-        # the last transport error so an expired session is reported instead
-        # of being downgraded to "may not exist or you may lack permission".
         read_error: str | None = None
 
         try:
-            # First try the discussion view endpoint which includes all entries
             view_response = await make_canvas_request(
                 "get", f"/courses/{course_id}/discussion_topics/{topic_id}/view"
             )
 
             if isinstance(view_response, dict) and "error" in view_response:
-                # Keep the FIRST failure: it is the one that saw the session
-                # expire, before clearing it made later calls report "none".
                 read_error = read_error or str(view_response["error"])
             if "error" not in view_response and "view" in view_response:
-                # Find our specific entry in the view
                 for entry in view_response.get("view", []):
                     if str(entry.get("id")) == str(entry_id):
                         entry_response = entry
@@ -529,7 +462,6 @@ def register_shared_discussion_tools(mcp: FastMCP) -> None:
                 entry_id=entry_id
             )
 
-        # Method 2: If view method failed, try the entry_list endpoint
         if not entry_response:
             try:
                 entry_list_response = await make_canvas_request(
@@ -551,7 +483,6 @@ def register_shared_discussion_tools(mcp: FastMCP) -> None:
                     entry_id=entry_id
                 )
 
-        # Method 3: Fallback to getting all entries and finding our target
         if not entry_response:
             try:
                 all_entries = await fetch_all_paginated_results(
@@ -565,7 +496,6 @@ def register_shared_discussion_tools(mcp: FastMCP) -> None:
                     for entry in all_entries:
                         if str(entry.get("id")) == str(entry_id):
                             entry_response = entry
-                            # Get recent_replies from this method
                             if include_replies:
                                 replies = entry.get("recent_replies", [])
                             break
@@ -578,15 +508,11 @@ def register_shared_discussion_tools(mcp: FastMCP) -> None:
                     entry_id=entry_id
                 )
 
-        # If we still don't have the entry, return error. An expired session
-        # or other transport failure is the cause when one was reported; only
-        # a genuinely empty successful read means the entry is unavailable.
         if not entry_response:
             if read_error and "session expired" in read_error.lower():
                 return f"Error: {read_error}"
             return f"Error: Could not find discussion entry {entry_id} in topic {topic_id}. The entry may not exist or you may not have permission to view it."
 
-        # Method 4: If we have the entry but no replies yet, try the replies endpoint
         if include_replies and not replies:
             try:
                 replies_response = await fetch_all_paginated_results(
@@ -605,7 +531,6 @@ def register_shared_discussion_tools(mcp: FastMCP) -> None:
                     entry_id=entry_id
                 )
 
-        # Get topic details for context
         topic_response = await make_canvas_request(
             "get", f"/courses/{course_id}/discussion_topics/{topic_id}"
         )
@@ -614,7 +539,6 @@ def register_shared_discussion_tools(mcp: FastMCP) -> None:
         if "error" not in topic_response:
             topic_title = topic_response.get("title", "Unknown Topic")
 
-        # Format the entry details
         course_display = await get_course_code(course_id) or course_identifier
 
         user_id = entry_response.get("user_id")
@@ -637,15 +561,11 @@ def register_shared_discussion_tools(mcp: FastMCP) -> None:
             result += f"Updated: {updated_at}\n"
 
         result += f"Read State: {read_state.title()}\n"
-        # Student-authored, returned raw, and post_discussion_entry lives in
-        # the same shared toolset — the highest-risk read→write loop in the
-        # issue-239 audit. Provenance must be explicit.
         result += (
             "\nContent:\n"
             f"{fence_untrusted(message, 'discussion entry by a course participant')}\n"
         )
 
-        # Format replies
         if include_replies:
             if replies:
                 result += f"\nReplies ({len(replies)}):\n"
@@ -693,7 +613,6 @@ def register_shared_discussion_tools(mcp: FastMCP) -> None:
         """
         course_id = await get_course_id(course_identifier)
 
-        # Get basic entries first
         entries = await fetch_all_paginated_results(
             f"/courses/{course_id}/discussion_topics/{topic_id}/entries",
             {"per_page": 100}
@@ -705,7 +624,6 @@ def register_shared_discussion_tools(mcp: FastMCP) -> None:
         if not entries:
             return f"No discussion entries found for topic {topic_id}."
 
-        # Get topic details for context
         topic_response = await make_canvas_request(
             "get", f"/courses/{course_id}/discussion_topics/{topic_id}"
         )
@@ -720,14 +638,12 @@ def register_shared_discussion_tools(mcp: FastMCP) -> None:
             f"{fence_untrusted(topic_title, 'discussion topic title')}\n\n"
         )
 
-        # Process each entry
         for entry in entries:
             entry_id = entry.get("id")
             user_name = entry.get("user_name", "Unknown user")
             message = entry.get("message", "")
             created_at = format_date(entry.get("created_at"))
 
-            # Clean up message for display
             if message:
                 message_preview = re.sub(r'<[^>]+>', '', message)
                 if len(message_preview) > 200:
@@ -743,16 +659,13 @@ def register_shared_discussion_tools(mcp: FastMCP) -> None:
                 f"{fence_untrusted(message_preview, 'discussion entry by a course participant')}\n"
             )
 
-            # Handle replies
             if include_replies:
                 replies: list[Any] | Any = []
 
-                # Method 1: Check recent_replies from the entry
                 recent_replies = entry.get("recent_replies", [])
                 if recent_replies:
                     replies = recent_replies
 
-                # Method 2: If no recent_replies or has_more_replies, try direct API call
                 has_more_replies = entry.get("has_more_replies", False)
                 if not replies or has_more_replies:
                     try:
@@ -772,7 +685,6 @@ def register_shared_discussion_tools(mcp: FastMCP) -> None:
                             entry_id=entry_id
                         )
 
-                # Display replies
                 if replies:
                     result += f"   💬 Replies ({len(replies)}):\n"
                     for i, reply in enumerate(replies, 1):
@@ -780,7 +692,6 @@ def register_shared_discussion_tools(mcp: FastMCP) -> None:
                         reply_created = format_date(reply.get("created_at"))
                         reply_msg = reply.get("message", "")
 
-                        # Clean reply message
                         if reply_msg:
                             reply_preview = re.sub(r'<[^>]+>', '', reply_msg)
                             if len(reply_preview) > 150:
@@ -801,7 +712,6 @@ def register_shared_discussion_tools(mcp: FastMCP) -> None:
                     else:
                         result += "   💬 No replies\n"
             else:
-                # Just show reply count without fetching
                 recent_count = len(entry.get("recent_replies", []))
                 has_more = entry.get("has_more_replies", False)
                 if recent_count > 0 or has_more:
@@ -834,18 +744,15 @@ def register_shared_discussion_tools(mcp: FastMCP) -> None:
             topic_id: Discussion topic ID
             message: Entry message content
         """
-        # Backstop for issue 239: never publish our provenance fence markers.
         if contains_fence_markers(message):
             return FENCE_LEAK_ERROR
 
         course_id = await get_course_id(course_identifier)
 
-        # Prepare the entry data
         data = {
             "message": message
         }
 
-        # Post the entry
         response = await make_canvas_request(
             "post", f"/courses/{course_id}/discussion_topics/{topic_id}/entries",
             data=data
@@ -854,7 +761,6 @@ def register_shared_discussion_tools(mcp: FastMCP) -> None:
         if "error" in response:
             return f"Error posting discussion entry: {response['error']}"
 
-        # Get context information for confirmation
         topic_response = await make_canvas_request(
             "get", f"/courses/{course_id}/discussion_topics/{topic_id}"
         )
@@ -863,12 +769,10 @@ def register_shared_discussion_tools(mcp: FastMCP) -> None:
         if "error" not in topic_response:
             topic_title = topic_response.get("title", "Unknown Topic")
 
-        # Extract entry details from response
         entry_id = response.get("id")
         entry_created_at = format_date(response.get("created_at"))
         entry_user_name = response.get("user_name", "You")
 
-        # Build confirmation message
         course_display = await get_course_code(course_id) or course_identifier
         result = "Discussion entry posted successfully!\n\n"
         result += f"Course: {course_display}\n"
@@ -894,13 +798,11 @@ def register_shared_discussion_tools(mcp: FastMCP) -> None:
             entry_id: Discussion entry ID to reply to
             message: Reply message content
         """
-        # Backstop for issue 239: never publish our provenance fence markers.
         if contains_fence_markers(message):
             return FENCE_LEAK_ERROR
 
         course_id = await get_course_id(course_identifier)
 
-        # Ensure IDs are strings
         topic_id_str = str(topic_id)
         entry_id_str = str(entry_id)
 

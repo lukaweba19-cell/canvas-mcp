@@ -44,7 +44,6 @@ def register_resources_and_prompts(mcp: FastMCP) -> None:
         """Get the description for a specific assignment."""
         course_id = await get_course_id(course_identifier)
 
-        # Ensure assignment_id is a string
         assignment_id_str = str(assignment_id)
 
         response = await make_canvas_request(
@@ -69,13 +68,11 @@ def register_resources_and_prompts(mcp: FastMCP) -> None:
         """Generate a summary of a Canvas course."""
         course_id = await get_course_id(course_identifier)
 
-        # Get course details
         course_response = await make_canvas_request("get", f"/courses/{course_id}")
 
         if "error" in course_response:
             return f"Error fetching course: {course_response['error']}"
 
-        # Get assignments
         assignments_response = await fetch_all_paginated_results(f"/courses/{course_id}/assignments")
 
         if isinstance(assignments_response, dict) and "error" in assignments_response:
@@ -91,7 +88,6 @@ def register_resources_and_prompts(mcp: FastMCP) -> None:
             upcoming_count = len(upcoming_assignments)
             assignments_info = f"{assignments_count} total assignments, {upcoming_count} upcoming"
 
-        # Get modules
         modules_response = await fetch_all_paginated_results(f"/courses/{course_id}/modules")
 
         if isinstance(modules_response, dict) and "error" in modules_response:
@@ -100,7 +96,6 @@ def register_resources_and_prompts(mcp: FastMCP) -> None:
             modules_count = len(modules_response)
             modules_info = f"{modules_count} modules"
 
-        # Create prompt
         course_name = course_response.get("name", "Unknown course")
         course_code = course_response.get("course_code", "No code")
 

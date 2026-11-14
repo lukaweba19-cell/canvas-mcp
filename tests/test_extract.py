@@ -63,7 +63,6 @@ def test_pptx_extracts_slides_and_speaker_notes():
 
     assert result.kind == "pptx"
     assert "base case" in result.text
-    # Speaker notes are the professor's own emphasis, so they must survive.
     assert "(speaker notes) This will be on the exam" in result.text
     assert [section.label for section in result.sections] == ["Slide 1", "Slide 2"]
     assert result.unreadable == []
@@ -205,8 +204,6 @@ def test_ruby_and_rails_source_files_are_read_as_text():
         "report.rake": "task :report do\n  puts 'weekly report'\nend",
         "course.gemspec": "Gem::Specification.new do |spec|\n  spec.name = 'course'\nend",
         "config.ru": "run Rails.application\n",
-        # Rails-era project files have no extension to key off, so they are
-        # recognised by name instead of being refused as an unknown format.
         "Gemfile": "source 'https://rubygems.org'\ngem 'rails', '~> 7.1'\n",
         "Rakefile": "require_relative 'config/application'\n",
     }
@@ -224,7 +221,6 @@ def test_image_only_pdf_with_a_broken_ocr_install_explains_the_fix(monkeypatch):
     joined = " ".join(result.warnings)
     assert "2 of 2 pages have no text layer" in joined
     assert "OCR is bundled with canvas-mcp" in joined
-    # Empty sections are reported as unreadable, never as "the file is empty".
     assert result.unreadable == ["p.1", "p.2"]
     assert result.word_count == 0
 
@@ -238,7 +234,6 @@ def test_image_only_pdf_uses_ocr_when_available(monkeypatch):
     assert engine.pages == [[1, 3]], "only the pages without text should be rendered"
     assert "BASE CASE STOPS RECURSION" in result.text
     assert any("read with OCR" in warning for warning in result.warnings)
-    # The page that already had a text layer is untouched.
     assert "text" in result.sections[1].text
 
 
