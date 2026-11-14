@@ -88,7 +88,32 @@ would make it readable (conversion, a transcript, a better scan).
 - `mark_module_item_done(course_identifier, module_id, item_id)` — tick off an
   item you have finished.
 
-## 5. Discussions
+## 5. Quizzes
+
+Reading quizzes is always available; taking one is a separate opt-in
+(`CANVAS_ENABLE_QUIZ_TAKING=true`) and is off by default.
+
+- `list_quizzes()` — every quiz across your active courses with due date,
+  availability, time limit, attempts used/allowed, points, engine and whether
+  it is published. Includes Planner-only quiz due items that the Classic
+  listing does not return. Call `list_quizzes(course_identifier=...)` for one
+  course.
+- `get_quiz_details(course_identifier, quiz_id)` — rules, description,
+  access-code requirement and question count.
+- `get_my_quiz_attempts(course_identifier, quiz_id)` — your own attempts,
+  scores, submission state and how many attempts remain.
+
+If the taking flag is on and the quiz is a Classic Quiz, the attempt flow is
+`start_quiz_attempt` → `answer_quiz_questions` (repeatable) →
+`submit_quiz_attempt`; keep the returned quiz submission id, validation token
+and attempt number between calls. Submitting is graded work: do not do it
+unless the student has seen the answers and asked you to submit.
+
+New Quizzes is listed and readable but cannot be taken here: Canvas has no
+student start/answer/submit API for it. Say exactly that and open it in Canvas;
+never pretend an attempt was started or submitted.
+
+## 6. Discussions
 
 - `list_discussion_topics(course_identifier)` — topics and their ids.
 - `get_discussion_topic_details(...)` — prompt, points, due date, entries count.
@@ -101,7 +126,7 @@ would make it readable (conversion, a transcript, a better scan).
 
 Never write a discussion post for the student without them approving the text.
 
-## 6. Messages
+## 7. Messages
 
 - `list_conversations(...)` — Canvas inbox threads.
 - `get_conversation_details(conversation_id)` — one thread, with messages.
@@ -111,7 +136,7 @@ Never write a discussion post for the student without them approving the text.
 Reading is safe; there is no send-message tool, so never promise to email or
 message an instructor through Canvas.
 
-## 7. Notes and study guides you already made
+## 8. Notes and study guides you already made
 
 - `save_note(title, content, tags, course_identifier, kind=...)` — a note tied to
   a course (kinds include `source-summary`, `lecture`, `journal`).
@@ -121,7 +146,7 @@ message an instructor through Canvas.
   / `update_study_guide(...)` — reuse and revise a saved guide instead of
   building a second one.
 
-## 8. Report honestly
+## 9. Report honestly
 
 End with: what you looked at, what you could not read and why (image-only,
 legacy `.doc`, unsupported encoding, no transcript), and what is still missing
@@ -146,6 +171,9 @@ something you only listed.
 | `list_course_files` | Files with a real readability status |
 | `download_course_file` | Save an unreadable file locally |
 | `list_assignments` | Assignments and due dates |
+| `list_quizzes` / `get_quiz_details` | Quizzes, rules and availability |
+| `get_my_quiz_attempts` | Your attempts, scores and remaining attempts |
+| `start_quiz_attempt` / `answer_quiz_questions` / `submit_quiz_attempt` | Opt-in Classic Quizzes attempt flow |
 | `get_rubric` / `get_rubric_assessment` | Raw rubric data from Canvas |
 | `get_my_submission` | What you submitted |
 | `list_assignment_drafts` | Locally saved drafts |

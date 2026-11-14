@@ -231,12 +231,10 @@ def _item_guidance(
     if item_type == "Discussion":
         return "list_discussion_entries"
     if item_type == "Quiz":
-        return extract.ContentStatus(
-            False,
-            "quiz",
-            "quizzes cannot be read or taken here; open it in Canvas",
-            kind="quiz",
-        ).label()
+        return (
+            "quiz — list_quizzes / get_quiz_details / get_my_quiz_attempts"
+            + (" (take: start_quiz_attempt when enabled)")
+        )
     if item_type == "File":
         entry = files_by_id.get(str(item.get("content_id")))
         if entry is None:

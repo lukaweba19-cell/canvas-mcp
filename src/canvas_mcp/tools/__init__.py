@@ -8,6 +8,7 @@ from .files import register_shared_file_tools
 from .materials import register_material_tools
 from .messaging import register_shared_messaging_tools
 from .modules import register_shared_module_tools
+from .quizzes import register_quiz_tools
 from .rubrics import register_rubric_tools, register_student_rubric_tools
 from .self_identity import register_self_identity_tools
 from .student_insight import register_student_insight_tools
@@ -20,6 +21,7 @@ __all__ = [
     'register_course_tools',
     'register_discovery_tools',
     'register_material_tools',
+    'register_quiz_tools',
     'register_rubric_tools',
     'register_self_identity_tools',
     'register_shared_assignment_tools',

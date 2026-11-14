@@ -90,7 +90,9 @@ async def test_content_map_marks_lti_and_offers_the_transcript(course, mcp):
     assert "https://example.com/reading" in external
 
     quiz = next(line for line in report.splitlines() if "[Quiz]" in line)
-    assert "NOT readable" in quiz
+    assert "NOT readable" not in quiz
+    assert "list_quizzes" in quiz
+    assert "get_my_quiz_attempts" in quiz
 
 
 async def test_content_map_does_not_call_unread_files_readable(course, mcp):

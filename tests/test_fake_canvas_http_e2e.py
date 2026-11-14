@@ -168,6 +168,65 @@ CONVERSATION = {
         }
     ],
 }
+QUIZ_CLASSIC = {
+    "id": 7,
+    "title": "Algebra check",
+    "description": "<p>Two short questions.</p>",
+    "quiz_type": "assignment",
+    "published": True,
+    "due_at": "2026-11-25T00:00:00Z",
+    "unlock_at": "2026-11-01T00:00:00Z",
+    "lock_at": "2026-12-01T00:00:00Z",
+    "time_limit": 30,
+    "allowed_attempts": 2,
+    "points_possible": 10,
+    "question_count": 2,
+    "scoring_policy": "keep_highest",
+    "assignment_id": 42,
+    "has_access_code": False,
+}
+QUIZ_NEW = {
+    "id": 8,
+    "title": "New Quizzes check",
+    "quiz_type": "quizzes.next",
+    "quiz_lti": True,
+    "published": True,
+    "due_at": "2026-11-28T00:00:00Z",
+    "time_limit": 20,
+    "allowed_attempts": 1,
+    "points_possible": 5,
+}
+QUIZ_QUESTIONS = [
+    {
+        "id": 1,
+        "question_name": "Addition",
+        "question_text": "What is 2 + 2?",
+        "question_type": "multiple_choice_question",
+        "points_possible": 5,
+        "answers": [
+            {"id": 1, "text": "4"},
+            {"id": 2, "text": "5"},
+        ],
+    },
+    {
+        "id": 2,
+        "question_name": "Short answer",
+        "question_text": "Name one cookie attribute.",
+        "question_type": "short_answer_question",
+        "points_possible": 5,
+        "answers": [],
+    },
+]
+QUIZ_ATTEMPT_COMPLETE = {
+    "id": 899,
+    "quiz_id": 7,
+    "attempt": 1,
+    "workflow_state": "complete",
+    "score": 8.0,
+    "started_at": "2026-11-01T10:00:00Z",
+    "finished_at": "2026-11-01T10:20:00Z",
+}
+
 SUBMISSION = {
     "id": 1,
     "user_id": 1,
@@ -195,6 +254,10 @@ class FakeState:
         self.canvas_base = ""
         self.storage_base = ""
         self.item_done = False
+        self.quiz_attempts = [dict(QUIZ_ATTEMPT_COMPLETE)]
+        self.quiz_started = False
+        self.quiz_answers: dict[str, list[str]] = {}
+        self.quiz_submitted = False
 
 
 class _CanvasHandler(BaseHTTPRequestHandler):
@@ -293,6 +356,35 @@ class _CanvasHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/v1/courses/225/assignments/43":
             self._json(ASSIGNMENT_TWO)
+            return
+
+        if path == "/api/v1/courses/225/quizzes":
+            self._json([QUIZ_CLASSIC, QUIZ_NEW])
+            return
+        if path == "/api/v1/courses/226/quizzes":
+            self._json([])
+            return
+        if path == "/api/v1/courses/225/quizzes/7":
+            self._json(QUIZ_CLASSIC)
+            return
+        if path == "/api/v1/courses/225/quizzes/8":
+            self._json(QUIZ_NEW)
+            return
+        if path == "/api/v1/courses/225/quizzes/7/submissions":
+            self._json(self.state.quiz_attempts)
+            return
+        if path == "/api/v1/quiz_submissions/900/questions":
+            self._json(
+                {
+                    "quiz_submission_questions": QUIZ_QUESTIONS,
+                    "quiz_submission": {
+                        "id": 900,
+                        "attempt": 2,
+                        "validation_token": "quiz-token",
+                        "workflow_state": "untaken",
+                    },
+                }
+            )
             return
 
         if path == "/api/v1/courses/225/pages":
@@ -414,7 +506,20 @@ class _CanvasHandler(BaseHTTPRequestHandler):
                             "points_possible": 10,
                         },
                         "submissions": {"submitted": False},
-                    }
+                    },
+                    {
+                        "course_id": 225,
+                        "plannable_type": "quiz",
+                        "plannable_id": 77,
+                        "plannable_date": "2026-11-30T00:00:00Z",
+                        "plannable": {
+                            "id": 77,
+                            "title": "Planner-only quiz",
+                            "due_at": "2026-11-30T00:00:00Z",
+                            "points_possible": 15,
+                        },
+                        "submissions": {"submitted": False},
+                    },
                 ]
             )
             return
@@ -553,6 +658,32 @@ class _CanvasHandler(BaseHTTPRequestHandler):
             self._json({"id": 1})
             return
 
+        if path == "/api/v1/courses/225/quizzes/7/submissions":
+            attempt = {
+                "id": 900,
+                "quiz_id": 7,
+                "attempt": 2,
+                "workflow_state": "untaken",
+                "score": None,
+                "validation_token": "quiz-token",
+            }
+            self.state.quiz_started = True
+            self.state.quiz_attempts.append(attempt)
+            self._json({"quiz_submissions": [attempt]})
+            return
+
+        if path == "/api/v1/quiz_submissions/900/complete":
+            self.state.quiz_submitted = True
+            for attempt in self.state.quiz_attempts:
+                if attempt.get("id") == 900:
+                    attempt["workflow_state"] = "complete"
+                    attempt["score"] = 10.0
+                    attempt["finished_at"] = "2026-11-14T13:00:00Z"
+                    self._json({"quiz_submissions": [attempt]})
+                    return
+            self._json({"quiz_submissions": []})
+            return
+
         self._json({"error": f"unhandled POST {path}"}, status=404)
 
     def do_PUT(self) -> None:  # noqa: N802 - stdlib handler naming
@@ -568,7 +699,29 @@ class _CanvasHandler(BaseHTTPRequestHandler):
             return
 
         length = int(self.headers.get("Content-Length", "0"))
-        self.rfile.read(length)
+        raw = self.rfile.read(length)
+        content_type = headers.get("content-type", "")
+        form = (
+            parse_qs(raw.decode("utf-8", errors="replace"))
+            if content_type.startswith("application/x-www-form-urlencoded")
+            else {}
+        )
+
+        if path == "/api/v1/quiz_submissions/900/questions":
+            self.state.quiz_answers = form
+            self._json(
+                {
+                    "quiz_submissions": [
+                        {
+                            "id": 900,
+                            "attempt": 2,
+                            "validation_token": "quiz-token",
+                            "workflow_state": "untaken",
+                        }
+                    ]
+                }
+            )
+            return
 
         if path == "/api/v1/courses/225/assignments/42/submissions/self":
             self._json(
@@ -1111,6 +1264,33 @@ def _tool_calls(tmp_path: Path) -> dict[str, list[dict]]:
             }
         ],
         "check_draft_style": [{"text": "A clear and simple sentence about cookies."}],
+        # Quiz reading, then one full Classic attempt (flag is on in this test).
+        "list_quizzes": [{}, {"course_identifier": 225}],
+        "get_quiz_details": [{"course_identifier": 225, "quiz_id": 7}],
+        "get_my_quiz_attempts": [{"course_identifier": 225, "quiz_id": 7}],
+        "start_quiz_attempt": [{"course_identifier": 225, "quiz_id": 7}],
+        "answer_quiz_questions": [
+            {
+                "course_identifier": 225,
+                "quiz_id": 7,
+                "quiz_submission_id": 900,
+                "validation_token": "quiz-token",
+                "attempt": 2,
+                "answers": [
+                    {"id": 1, "answer": "4"},
+                    {"id": 2, "answer": "HTTPOnly"},
+                ],
+            }
+        ],
+        "submit_quiz_attempt": [
+            {
+                "course_identifier": 225,
+                "quiz_id": 7,
+                "quiz_submission_id": 900,
+                "validation_token": "quiz-token",
+                "attempt": 2,
+            }
+        ],
     }
 
 
@@ -1165,6 +1345,7 @@ async def test_every_registered_tool_over_real_http_transport(tmp_path):
             "STUDENT_WRITE_TOOLS": (
                 "submit_assignment,comment_on_my_submission,mark_module_item_done"
             ),
+            "CANVAS_ENABLE_QUIZ_TAKING": "true",
             "LOG_LEVEL": "WARNING",
         }
     )
@@ -1223,6 +1404,7 @@ async def test_every_registered_tool_over_real_http_transport(tmp_path):
                     "conversation_id",
                     "user_id",
                     "rubric_id",
+                    "quiz_submission_id",
                 }
 
                 def wire(raw_args: dict) -> dict:
@@ -1231,12 +1413,14 @@ async def test_every_registered_tool_over_real_http_transport(tmp_path):
                         for key, value in raw_args.items()
                     }
 
+                outputs: dict[str, list[str]] = {}
                 for name, invocations in calls.items():
                     before = len(state.requests)
                     for raw_args in invocations:
                         args = wire(raw_args)
                         result = await session.call_tool(name, args)
                         text = text_of(result)
+                        outputs.setdefault(name, []).append(text)
                         assert not result.is_error, f"{name}: {text}"
                         assert "session expired" not in text.lower(), f"{name}: {text}"
                         assert not text.lstrip().startswith(
@@ -1254,6 +1438,47 @@ async def test_every_registered_tool_over_real_http_transport(tmp_path):
                     made = state.requests[before:]
                     if name not in LOCAL_TOOLS:
                         assert made, f"{name} made no Canvas request"
+
+                # Quiz discovery: due dates, limits, attempts/scores, and a
+                # Planner-only item that the Classics listing never returns.
+                all_quizzes = outputs["list_quizzes"][0]
+                assert "Algebra check" in all_quizzes, all_quizzes
+                assert "Planner-only quiz" in all_quizzes, all_quizzes
+                assert "Time limit: 30 minutes" in all_quizzes, all_quizzes
+                assert "score 8" in all_quizzes, all_quizzes
+                assert "OUTSTANDING" in all_quizzes, all_quizzes
+                assert "New Quizzes" in all_quizzes, all_quizzes
+                course_quizzes = outputs["list_quizzes"][1]
+                assert "Algebra check" in course_quizzes, course_quizzes
+                details = outputs["get_quiz_details"][0]
+                assert "Questions: 2" in details, details
+                assert "Time limit: 30 minutes" in details, details
+                attempts = outputs["get_my_quiz_attempts"][0]
+                assert "attempt 1" in attempts and "score 8" in attempts, attempts
+
+                # Full Classic attempt flow: start, save answers, submit.
+                started = outputs["start_quiz_attempt"][0]
+                assert "Quiz submission ID: 900" in started, started
+                assert "quiz-token" in started, started
+                assert "What is 2 + 2?" in started, started
+                assert state.quiz_answers["quiz_questions[][id]"] == ["1", "2"]
+                assert state.quiz_answers["quiz_questions[][answer]"] == [
+                    "4",
+                    "HTTPOnly",
+                ]
+                assert "Score: 10" in outputs["submit_quiz_attempt"][0]
+                assert state.quiz_submitted
+
+                # Flag is on here, but New Quizzes has no student take API and
+                # must be refused rather than faked.
+                unsupported = text_of(
+                    await session.call_tool(
+                        "start_quiz_attempt",
+                        {"course_identifier": "225", "quiz_id": "8"},
+                    )
+                )
+                assert "New Quizzes" in unsupported, unsupported
+                assert "does not expose" in unsupported, unsupported
 
                 # Every request in the sweep carried the session cookie and no
                 # bearer header; every write carried the exact CSRF token.
@@ -1289,6 +1514,113 @@ async def test_every_registered_tool_over_real_http_transport(tmp_path):
                 # Downloads reached storage with no Canvas cookie.
                 assert state.storage_cookies
                 assert all(cookie == "" for cookie in state.storage_cookies)
+    finally:
+        if os.name == "nt":
+            process.terminate()
+            try:
+                process.wait(timeout=15)
+            except subprocess.TimeoutExpired:
+                process.kill()
+        else:
+            try:
+                os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            try:
+                process.wait(timeout=15)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+        log_handle.close()
+        for server, thread in (
+            (canvas_server, canvas_thread),
+            (storage_server, storage_thread),
+        ):
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+
+
+async def test_quiz_taking_is_off_by_default(tmp_path):
+    """Reading quizzes works without the flag; taking refuses with guidance."""
+    state = FakeState()
+    storage_server, storage_base, storage_thread = _start(_StorageHandler, state)
+    canvas_server, canvas_base, canvas_thread = _start(_CanvasHandler, state)
+    state.canvas_base = canvas_base
+    state.storage_base = storage_base
+
+    session_file = tmp_path / "session.json"
+    _write_session(session_file, canvas_base + "/api/v1", state.cookie, state.csrf)
+
+    port = _free_port()
+    server_log = tmp_path / "server.log"
+    env = dict(os.environ)
+    env.pop("CANVAS_ENABLE_QUIZ_TAKING", None)
+    env.update(
+        {
+            "CANVAS_API_URL": canvas_base + "/api/v1",
+            "CANVAS_SESSION_FILE": str(session_file),
+            "CANVAS_AUTH_NO_BROWSER": "1",
+            "CANVAS_ALLOW_INSECURE_HTTP": "true",
+            "CANVAS_STUDENT_DIR": str(tmp_path / "student"),
+            "LOG_LEVEL": "WARNING",
+        }
+    )
+    log_handle = server_log.open("w")
+    process = subprocess.Popen(
+        [
+            "uv",
+            "run",
+            "canvas-mcp-server",
+            "--transport",
+            "streamable-http",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(port),
+        ],
+        cwd=str(ROOT),
+        env=env,
+        stdout=log_handle,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+    )
+
+    try:
+        if not _wait_for_port(port):
+            raise AssertionError(
+                "server never listened; log:\n" + server_log.read_text(errors="replace")
+            )
+        async with streamable_http_client(f"http://127.0.0.1:{port}/mcp") as (
+            read,
+            write,
+        ):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+
+                listed = text_of(
+                    await session.call_tool(
+                        "list_quizzes", {"course_identifier": "225"}
+                    )
+                )
+                assert "Algebra check" in listed, listed
+
+                refused = text_of(
+                    await session.call_tool(
+                        "start_quiz_attempt",
+                        {"course_identifier": "225", "quiz_id": "7"},
+                    )
+                )
+                assert "disabled" in refused.lower(), refused
+                assert "CANVAS_ENABLE_QUIZ_TAKING" in refused, refused
+                assert not [
+                    request
+                    for request in state.requests
+                    if request[0] == "POST"
+                    and request[1].endswith("/quizzes/7/submissions")
+                ]
     finally:
         if os.name == "nt":
             process.terminate()

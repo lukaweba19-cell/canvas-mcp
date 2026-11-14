@@ -245,6 +245,13 @@ class Config:
         self.course_agent_policy_allow_ttl = _int_env("COURSE_AGENT_POLICY_ALLOW_TTL", 30)
         self.course_agent_policy_deny_ttl = _int_env("COURSE_AGENT_POLICY_DENY_TTL", 300)
 
+        # --- Quiz taking (separate from reading) ---
+        # Reading quizzes is always available. Starting, answering and
+        # submitting an attempt consumes one of the student's attempts and
+        # produces graded work, so it is an explicit opt-in, independent of
+        # STUDENT_WRITE_TOOLS and of every read tool.
+        self.quiz_taking = _bool_env("CANVAS_ENABLE_QUIZ_TAKING", False)
+
 
 # Global configuration instance
 _config: Config | None = None

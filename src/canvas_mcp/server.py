@@ -14,6 +14,11 @@ Supports two transport modes:
 
 Authentication is the student's Canvas browser session, captured from Chrome
 (see core/session.py and core/chrome_login.py). There is no API token.
+
+Quizzes can always be read (list, details, your own attempts). Taking a quiz
+is a separate opt-in, CANVAS_ENABLE_QUIZ_TAKING=false by default; only Classic
+Quizzes can be taken, because Canvas exposes no student take API for New
+Quizzes. See tools/quizzes.py and env.template.
 """
 
 import argparse
@@ -34,6 +39,7 @@ from .tools import (
     register_course_tools,
     register_discovery_tools,
     register_material_tools,
+    register_quiz_tools,
     register_rubric_tools,
     register_self_identity_tools,
     register_shared_assignment_tools,
@@ -107,6 +113,7 @@ def register_all_tools(mcp: FastMCP) -> None:
     register_shared_module_tools(mcp)
     register_shared_file_tools(mcp)
     register_shared_messaging_tools(mcp)
+    register_quiz_tools(mcp)
     register_rubric_tools(mcp)
     register_student_rubric_tools(mcp)
     register_discovery_tools(mcp)

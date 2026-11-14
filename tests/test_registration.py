@@ -42,6 +42,13 @@ NEW_TOOLS = {
     "get_my_grade_breakdown",
     "get_my_week_plan",
     "get_my_feedback",
+    # quizzes: reading is always on, taking is opt-in
+    "list_quizzes",
+    "get_quiz_details",
+    "get_my_quiz_attempts",
+    "start_quiz_attempt",
+    "answer_quiz_questions",
+    "submit_quiz_attempt",
 }
 
 # The capabilities the user asked for, each mapped to the tools that provide it.
@@ -73,6 +80,16 @@ CAPABILITIES = {
         "get_my_grade_breakdown",
         "get_my_week_plan",
         "get_my_feedback",
+    },
+    "pull quizzes and attempts": {
+        "list_quizzes",
+        "get_quiz_details",
+        "get_my_quiz_attempts",
+    },
+    "take quizzes when enabled": {
+        "start_quiz_attempt",
+        "answer_quiz_questions",
+        "submit_quiz_attempt",
     },
 }
 
@@ -117,7 +134,7 @@ async def test_no_educator_tools_are_exposed(mcp):
 
 async def test_tool_count_is_pinned(mcp):
     names = await _registered(mcp)
-    assert len(names) == 69, sorted(names)
+    assert len(names) == 75, sorted(names)
 
 
 async def test_new_tool_schemas_are_usable(mcp):
