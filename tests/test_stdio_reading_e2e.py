@@ -113,11 +113,26 @@ def canvas_stub():
 
 
 async def test_real_stdio_server_reads_pdf_and_pptx(tmp_path, canvas_stub):
+    session_file = tmp_path / "session.json"
+    session_file.write_text(
+        json.dumps(
+            {
+                "base_url": canvas_stub,
+                "cookies": {
+                    "_canvas_session": "e2e-session",
+                    "_csrf_token": "e2e-csrf",
+                },
+                "csrf": "e2e-csrf",
+            }
+        ),
+        encoding="utf-8",
+    )
     env = dict(os.environ)
     env.update(
         {
             "CANVAS_API_URL": canvas_stub,
-            "CANVAS_API_TOKEN": "test-token",
+            "CANVAS_SESSION_FILE": str(session_file),
+            "CANVAS_AUTH_NO_BROWSER": "1",
             "CANVAS_ALLOW_INSECURE_HTTP": "true",
             "CANVAS_STUDENT_DIR": str(tmp_path / "student"),
             "MCP_SERVER_NAME": "canvas-api",
@@ -125,7 +140,9 @@ async def test_real_stdio_server_reads_pdf_and_pptx(tmp_path, canvas_stub):
     )
     params = StdioServerParameters(
         command="uv",
-        args=["run", "canvas-mcp-server"],
+        # HTTP is the default transport now; this test is specifically the
+        # stdio path, so it must ask for it explicitly.
+        args=["run", "canvas-mcp-server", "--transport", "stdio"],
         env=env,
         cwd=str(ROOT),
     )

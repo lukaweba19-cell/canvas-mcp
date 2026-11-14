@@ -8,31 +8,25 @@ assignment handling, discussion facilitation, student analytics, and personal
 academic tracking.
 
 Supports two transport modes:
-- stdio (default): Local process communication, credentials from .env
-- streamable-http: HTTP server, per-request token via X-Canvas-Token header;
-  the Canvas API URL is pinned by server config (CANVAS_API_URL), not the client.
+- streamable-http (default): serves /mcp on 127.0.0.1:8819 so an MCP client can
+  simply be pointed at the URL.
+- stdio: the MCP client spawns this process as a child.
+
+Authentication is the student's Canvas browser session, captured from Chrome
+(see core/session.py and core/chrome_login.py). There is no API token.
 """
 
 import argparse
 import asyncio
-import hmac
 import importlib.resources
-import json
 import os
 import sys
 from pathlib import Path
-from typing import Any
 
 from fastmcp import FastMCP
 from fastmcp.server.providers.skills import SkillsDirectoryProvider
 
-from .core.config import get_config, validate_canvas_url_scheme, validate_config
-from .core.credentials import (
-    RequestCredentials,
-    clear_http_request_context,
-    set_http_request_active,
-    set_request_credentials,
-)
+from .core.config import get_config, validate_canvas_url_scheme
 from .core.logging import log_error, log_info, log_warning
 from .core.tool_results import install_tool_result_contract
 from .resources import register_resources_and_prompts
@@ -55,91 +49,6 @@ from .tools import (
     register_study_tools,
     register_workspace_tools,
 )
-
-
-async def _send_json_error(send: Any, status: int, message: str) -> None:
-    """Emit a minimal ASGI JSON error response (used to fail closed)."""
-    body = json.dumps({"error": message}).encode("utf-8")
-    await send({
-        "type": "http.response.start",
-        "status": status,
-        "headers": [
-            (b"content-type", b"application/json"),
-            (b"content-length", str(len(body)).encode("ascii")),
-        ],
-    })
-    await send({"type": "http.response.body", "body": body})
-
-
-def _access_key_ok(presented: str, allowed: frozenset[str]) -> bool:
-    """Constant-time check of a presented access key against the allowed set."""
-    if not presented:
-        return False
-    return any(hmac.compare_digest(presented, key) for key in allowed)
-
-
-class CanvasCredentialMiddleware:
-    """ASGI middleware that extracts the caller's Canvas token from headers.
-
-    For each incoming HTTP request, reads X-Canvas-Token and combines it with
-    the server-pinned CANVAS_API_URL so make_canvas_request uses the caller's
-    own Canvas token instead of any server .env token.
-
-    Fail-closed semantics:
-    - When MCP_ACCESS_KEYS is configured, a missing/invalid X-MCP-Access-Key
-      returns HTTP 401 before anything else (the v1 multi-user gate).
-    - A missing/blank X-Canvas-Token returns HTTP 401 before the app runs.
-    - X-Canvas-URL is ignored (logged); the Canvas API URL is never
-      client-controlled, which removes the SSRF surface entirely.
-    - The "HTTP request active" marker is set so downstream code refuses to
-      fall back to the server's own credentials.
-    """
-
-    def __init__(self, app: Any) -> None:
-        self.app = app
-
-    async def __call__(self, scope: dict, receive: Any, send: Any) -> None:
-        if scope["type"] != "http":
-            # Passthrough for lifespan and other non-HTTP scopes
-            await self.app(scope, receive, send)
-            return
-
-        config = get_config()
-
-        set_http_request_active(True)
-        try:
-            # Parse headers from ASGI scope (list of [name, value] byte pairs)
-            headers = dict(scope.get("headers", []))
-
-            # Access-key gate (when configured): reject before touching credentials.
-            allowed_keys = config.mcp_access_keys
-            if allowed_keys:
-                presented = headers.get(b"x-mcp-access-key", b"").decode("utf-8", errors="ignore").strip()
-                if not _access_key_ok(presented, allowed_keys):
-                    await _send_json_error(send, 401, "Invalid or missing X-MCP-Access-Key")
-                    return
-
-            token = headers.get(b"x-canvas-token", b"").decode("utf-8", errors="ignore").strip()
-
-            if b"x-canvas-url" in headers:
-                log_warning("Ignoring X-Canvas-URL header; Canvas API URL is server-pinned")
-
-            if not token:
-                await _send_json_error(send, 401, "Missing X-Canvas-Token header")
-                return
-
-            canvas_url = config.canvas_api_url.strip()
-            if not canvas_url:
-                log_error("CANVAS_API_URL is required in HTTP mode but is not configured")
-                await _send_json_error(send, 500, "Server Canvas API URL is not configured")
-                return
-
-            set_request_credentials(
-                RequestCredentials(api_token=token, api_url=canvas_url)
-            )
-            await self.app(scope, receive, send)
-        finally:
-            clear_http_request_context()
 
 
 def skills_root() -> Path | None:
@@ -218,23 +127,35 @@ def register_all_tools(mcp: FastMCP) -> None:
     log_info("Canvas student MCP tools registered successfully!")
 
 
-async def _validate_token() -> tuple[bool, str]:
-    """Validate the Canvas API token by calling /users/self.
+def _is_loopback_host(host: str) -> bool:
+    """Whether a bind address never leaves this machine."""
+    import ipaddress
 
-    Returns:
-        Tuple of (success, message). On success the message contains the
-        authenticated user name; on failure it describes the error.
-    """
+    host = (host or "").strip().strip("[]").lower()
+    if host in {"localhost", "::1"}:
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+async def _check_connection() -> tuple[bool, str]:
+    """Confirm a Canvas session works by calling /users/self."""
     from .core.client import make_canvas_request
+    from .core.session import ensure_session
 
     try:
+        session, reason = await ensure_session()
+        if session is None:
+            return (False, reason or "No Canvas session available.")
         response = await make_canvas_request("get", "/users/self")
         if isinstance(response, dict) and "error" in response:
-            return (False, f"Token validation failed: {response['error']}")
+            return (False, f"Session check failed: {response['error']}")
         user_name = response.get("name", "Unknown") if isinstance(response, dict) else "Unknown"
         return (True, f"Authenticated as: {user_name}")
     except Exception as e:
-        return (False, f"Token validation error: {type(e).__name__}: {e}")
+        return (False, f"Session check error: {type(e).__name__}: {e}")
 
 
 def test_connection() -> bool:
@@ -243,9 +164,9 @@ def test_connection() -> bool:
 
     try:
         async def test_api() -> bool:
-            ok, message = await _validate_token()
+            ok, message = await _check_connection()
             if ok:
-                log_info(f"✓ API connection successful! {message}")
+                log_info(f"✓ Canvas connection successful! {message}")
                 return True
             else:
                 log_error(message)
@@ -276,13 +197,13 @@ def main() -> None:
     parser.add_argument(
         "--transport",
         choices=["stdio", "streamable-http"],
-        default="stdio",
-        help="Transport protocol (default: stdio)"
+        default="streamable-http",
+        help="Transport protocol (default: streamable-http, served at /mcp)"
     )
     parser.add_argument(
         "--host",
-        default="0.0.0.0",
-        help="Host to bind HTTP server (default: 0.0.0.0)"
+        default="127.0.0.1",
+        help="Host to bind HTTP server (default: 127.0.0.1)"
     )
     parser.add_argument(
         "--port",
@@ -295,66 +216,40 @@ def main() -> None:
 
     config = get_config()
 
-    # Admin access-approval commands talk only to the overlay store (Azure, via
-    # az login) — not Canvas — so dispatch them before the Canvas-credential /
-    # HTTP-mode validation below, which they don't need.
-    # HTTP mode: the Canvas URL is server-pinned and per-user tokens arrive via
-    # X-Canvas-Token. A server token must NOT be set, or a missing request token
-    # could silently fall back to it (mis-attributing actions to the operator).
-    if is_http:
-        if not config.canvas_api_url:
-            log_error("CANVAS_API_URL is required in HTTP mode (the Canvas API URL is server-pinned)")
-            sys.exit(1)
-        # HTTP mode never calls validate_config() (that path is stdio's .env
-        # check), so the cleartext-URL rejection has to be applied here too.
-        # It matters more here than in stdio: the URL is server-pinned, so one
-        # http:// typo leaks every caller's token, not just the operator's.
-        if not validate_canvas_url_scheme():
-            sys.exit(1)
-        if config.canvas_api_token:
-            log_error(
-                "CANVAS_API_TOKEN must NOT be set in HTTP mode — clients supply their "
-                "own token via the X-Canvas-Token header. Unset it and restart."
-            )
-            sys.exit(1)
-        if not config.mcp_access_keys:
-            # Secure-by-default: refuse to start an ungated endpoint unless the
-            # operator has explicitly accepted that external auth fronts it.
-            # Student education records are FERPA "Sensitive" data (U of I DAT01)
-            # and must never be accessed without specific authorization, so a
-            # silent fail-open here is a compliance failure, not a warning.
-            if config.mcp_allow_unauthenticated:
-                log_warning(
-                    "HTTP mode has no MCP_ACCESS_KEYS, but MCP_ALLOW_UNAUTHENTICATED=true "
-                    "is set — assuming external authentication (e.g. Entra/Easy Auth) "
-                    "fronts this endpoint. The app-level key gate is DISABLED."
-                )
-            else:
-                log_error(
-                    "HTTP mode requires MCP_ACCESS_KEYS (the app-level auth gate). "
-                    "Refusing to start an unauthenticated endpoint that can read and "
-                    "write Canvas gradebooks. Set MCP_ACCESS_KEYS, or if an external "
-                    "authenticator (Entra/Easy Auth) fronts this endpoint, set "
-                    "MCP_ALLOW_UNAUTHENTICATED=true to opt in deliberately."
-                )
-                sys.exit(1)
-    else:
-        # stdio mode: .env credentials are required (single-user, env-based auth)
-        if not validate_config():
-            log_error("Please check your .env file configuration")
-            log_error("Use the env.template file as a reference")
-            sys.exit(1)
+    # Credentials are a Canvas browser session, not a token. No tool needs a
+    # token in either transport; the session is captured on first use.
+    if not config.canvas_api_url:
+        log_error("CANVAS_API_URL is required (e.g. https://school.instructure.com/api/v1)")
+        log_error("Use the env.template file as a reference")
+        sys.exit(1)
+    if not validate_canvas_url_scheme():
+        sys.exit(1)
+    if is_http and not _is_loopback_host(args.host):
+        log_error(
+            "HTTP transport refuses to bind a non-loopback address: the server holds "
+            "your Canvas browser session, so exposing it would let anyone on the "
+            "network act as you. Use --host 127.0.0.1 (or a local tunnel/proxy that "
+            "adds its own authentication)."
+        )
+        sys.exit(1)
 
     # Handle special commands
     if args.config:
         print("Canvas MCP Server Configuration:", file=sys.stderr)
         print(f"  Server Name: {config.mcp_server_name}", file=sys.stderr)
         print(f"  Transport: {args.transport}", file=sys.stderr)
+        print(f"  Canvas API URL: {config.canvas_api_url}", file=sys.stderr)
         if is_http:
             print(f"  Host: {args.host}", file=sys.stderr)
             print(f"  Port: {args.port}", file=sys.stderr)
-        else:
-            print(f"  Canvas API URL: {config.canvas_api_url}", file=sys.stderr)
+        from .core.session import load_session, session_path
+
+        stored = load_session()
+        print(f"  Session file: {session_path()}", file=sys.stderr)
+        print(
+            f"  Session: {'stored' if stored is not None else 'none (will open Chrome on first use)'}",
+            file=sys.stderr,
+        )
         print(f"  Debug Mode: {config.debug}", file=sys.stderr)
         print(f"  API Timeout: {config.api_timeout}s", file=sys.stderr)
         print(f"  Cache TTL: {config.cache_ttl}s", file=sys.stderr)
@@ -386,32 +281,21 @@ def main() -> None:
     if config.institution_name:
         log_info(f"Institution: {config.institution_name}")
 
-    # Validate token on startup for stdio mode only
-    if not is_http:
-        try:
-            ok, message = asyncio.run(_validate_token())
-            if ok:
-                log_info(f"✓ {message}")
-            else:
-                log_warning(
-                    f"Token validation failed: {message}. "
-                    "Check your CANVAS_API_TOKEN. Server will start anyway."
-                )
-        except Exception:
-            log_warning(
-                "Could not validate token on startup (network may be unavailable). "
-                "Server will start anyway."
+    # Report session state without blocking startup: the first Canvas call
+    # captures a session (opening Chrome only when nothing is stored).
+    try:
+        from .core.session import load_session
+
+        stored = load_session()
+        if stored is not None:
+            log_info("Canvas session: stored (captured from Chrome)")
+        else:
+            log_info(
+                "Canvas session: none yet. The first Canvas tool call opens a Chrome "
+                "window so you can sign in."
             )
-        finally:
-            # asyncio.run() creates and immediately closes its own event loop.
-            # Any global httpx client or asyncio semaphore created during token
-            # validation is now bound to that closed loop.  Reset them so they
-            # are recreated fresh inside the event loop that mcp.run() starts.
-            from .core import client as _client_module
-            _client_module.http_client = None
-            _client_module._http_client_loop_ref = None
-            _client_module._request_semaphore = None
-            _client_module._semaphore_loop_ref = None
+    except Exception:
+        log_warning("Could not read the stored Canvas session; will retry on first use")
 
     log_info("Use Ctrl+C to stop the server")
 
@@ -430,44 +314,27 @@ def main() -> None:
         log_error("Server error", exc=e)
         sys.exit(1)
     finally:
-        # Cleanup HTTP client resources (stdio mode only — HTTP uses per-request clients)
-        if not is_http:
-            from .core.client import cleanup_http_client
-
-            try:
-                asyncio.run(cleanup_http_client())
-            except RuntimeError:
-                pass  # Event loop already closed — safe to ignore
         log_info("Server stopped")
 
 
 def _run_http_server(mcp: FastMCP, host: str, port: int) -> None:
-    """Run the MCP server with HTTP transport and credential middleware."""
+    """Serve the MCP endpoint over streamable HTTP.
+
+    The server owns the single student session, so requests need no per-caller
+    credential header; the endpoint is loopback-only by default and is refused
+    on any other bind address in ``main``.
+    """
+    import anyio
     import uvicorn
 
-    # fastmcp: http_app() replaces v1 streamable_http_app(); streamable
-    # HTTP is the default transport and the endpoint stays mounted at /mcp.
-    # CanvasCredentialMiddleware passes lifespan scopes through, so the
-    # inner app's lifespan (required by fastmcp) still runs under uvicorn.
-    #
-    # stateless_http=True: every request is self-contained (credentials arrive
-    # per-request via X-Canvas-Token; no tool uses server-initiated session
-    # features), so keeping an in-memory session table only creates a failure
-    # mode — an App Service recycle drops it, and mcp-remote hangs forever on
-    # the resulting stale-session 404 instead of re-initializing (issue #159).
-    starlette_app = mcp.http_app(stateless_http=True)
-    app = CanvasCredentialMiddleware(starlette_app)
-
+    app = mcp.http_app(stateless_http=True)
     config = uvicorn.Config(
         app,
         host=host,
         port=port,
         log_level="info",
     )
-    server = uvicorn.Server(config)
-    import anyio
-
-    anyio.run(server.serve)
+    anyio.run(uvicorn.Server(config).serve)
 
 
 if __name__ == "__main__":

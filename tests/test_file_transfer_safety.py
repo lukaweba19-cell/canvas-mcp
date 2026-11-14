@@ -8,6 +8,8 @@ actually received.
 
 from __future__ import annotations
 
+import json
+import tempfile
 import threading
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -21,6 +23,7 @@ from canvas_mcp.core.client import (
     upload_file_to_storage,
 )
 from canvas_mcp.core.config import reset_config
+from canvas_mcp.core.session import reset_session_cache
 
 PAYLOAD = b"%PDF-1.4\nsecret course notes\n"
 
@@ -73,11 +76,28 @@ def canvas_config(monkeypatch):
 
     def configure(base: str) -> None:
         monkeypatch.setenv("CANVAS_API_URL", f"{base}/api/v1")
-        monkeypatch.setenv("CANVAS_API_TOKEN", "student-token")
         monkeypatch.setenv("CANVAS_ALLOW_INSECURE_HTTP", "true")
+        session_file = Path(tempfile.mkdtemp()) / "session.json"
+        session_file.write_text(
+            json.dumps(
+                {
+                    "base_url": f"{base}/api/v1",
+                    "cookies": {
+                        "_canvas_session": "student-session",
+                        "_csrf_token": "student-csrf",
+                    },
+                    "csrf": "student-csrf",
+                }
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("CANVAS_SESSION_FILE", str(session_file))
+        monkeypatch.setenv("CANVAS_AUTH_NO_BROWSER", "1")
+        reset_session_cache()
         reset_config()
 
     yield configure
+    reset_session_cache()
     reset_config()
 
 
@@ -106,10 +126,11 @@ async def test_download_follows_storage_redirect_without_the_token(canvas_config
 
             assert body == PAYLOAD
             canvas_requests = dict(canvas.requests)  # type: ignore[attr-defined]
-            assert canvas_requests["/files/1"]["Authorization"] == "Bearer student-token"
+            assert "_canvas_session=student-session" in canvas_requests["/files/1"]["Cookie"]
+            assert "Authorization" not in canvas_requests["/files/1"]
             storage_requests = dict(storage.requests)  # type: ignore[attr-defined]
             assert "/blob?signature=abc" in storage_requests
-            assert "Authorization" not in storage_requests["/blob?signature=abc"]
+            assert "Cookie" not in storage_requests["/blob?signature=abc"]
 
 
 async def test_file_url_outside_canvas_is_fetched_unauthenticated(canvas_config):
@@ -121,7 +142,7 @@ async def test_file_url_outside_canvas_is_fetched_unauthenticated(canvas_config)
 
             assert body == PAYLOAD
             received = dict(storage.requests)["/direct"]  # type: ignore[attr-defined]
-            assert "Authorization" not in received
+            assert "Cookie" not in received
 
 
 async def test_upload_confirmation_to_another_origin_is_refused(
@@ -180,4 +201,4 @@ async def test_upload_confirmation_back_to_canvas_keeps_the_token(
 
             assert result["id"] == 7
             confirmed = dict(canvas.requests)["/confirmed"]  # type: ignore[attr-defined]
-            assert confirmed["Authorization"] == "Bearer student-token"
+            assert "_canvas_session=student-session" in confirmed["Cookie"]

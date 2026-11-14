@@ -1,6 +1,7 @@
 """HTTP client and Canvas API utilities."""
 
 import asyncio
+import json
 import re
 import weakref
 from collections.abc import AsyncIterator
@@ -12,8 +13,14 @@ from urllib.parse import urlencode
 import httpx
 
 from .anonymization import anonymize_response_data, scrub_identity
-from .credentials import get_request_credentials, is_http_request_active
 from .logging import log_debug, log_error, log_warning, sanitize_url
+from .session import (
+    clear_session,
+    ensure_session,
+    load_session,
+    looks_like_login,
+    strip_xssi,
+)
 from .write_outcome import NO_WRITE_STATUSES, RequestFailure, WriteOutcome
 
 # Rate limit retry configuration
@@ -28,14 +35,40 @@ API_ROOT_REST: Final = "rest"
 API_ROOT_QUIZ: Final = "quiz"
 
 
-def _canvas_auth_headers(api_token: str) -> dict[str, str]:
-    """Build the standard Canvas auth + User-Agent headers for a token."""
+def _session_headers() -> dict[str, str]:
+    """Canvas session headers: CSRF for writes plus a stable User-Agent.
+
+    There is deliberately no Authorization header: this server authenticates
+    with the student's browser session cookie, never a bearer token.
+    """
     from .. import __version__
 
-    return {
-        "Authorization": f"Bearer {api_token}",
+    headers = {
         "User-Agent": f"canvas-mcp/{__version__} (https://github.com/vishalsachdev/canvas-mcp)",
+        "Accept": "application/json",
     }
+    session = load_session()
+    if session is not None and session.csrf:
+        headers["X-CSRF-Token"] = session.csrf
+    return headers
+
+
+def _is_login_response(response: httpx.Response) -> bool:
+    """Whether Canvas answered with a login page instead of API data."""
+    if response.is_redirect:
+        location = response.headers.get("location", "").lower()
+        return any(token in location for token in ("/login", "saml", "oauth", "auth"))
+    if "text/html" in response.headers.get("content-type", "").lower():
+        return looks_like_login(response.text)
+    return False
+
+
+def _response_json(response: httpx.Response) -> Any:
+    """Parse a Canvas response, removing the XSSI guard cookie auth adds."""
+    text = strip_xssi(response.text)
+    if not text.strip():
+        return {}
+    return json.loads(text)
 
 def _resolve_canvas_api_root(base_api_url: str, api_root: Literal["rest", "quiz"]) -> str:
     """Resolve a configured ``…/api/v<N>`` base URL to a selected Canvas API root.
@@ -56,10 +89,6 @@ def _resolve_canvas_api_root(base_api_url: str, api_root: Literal["rest", "quiz"
 
     return f"{base_api_url[:match.start()]}/api/quiz/v1"
 
-
-# HTTP client will be initialized with configuration
-http_client: httpx.AsyncClient | None = None
-_http_client_loop_ref: "weakref.ref[asyncio.AbstractEventLoop] | None" = None  # weakref to the loop that owns http_client
 
 # Concurrency limiter for outbound Canvas API calls
 _request_semaphore: asyncio.Semaphore | None = None
@@ -323,81 +352,33 @@ def _anonymize_for_endpoint(result: Any, endpoint: str) -> tuple[Any, str]:
     return result, mode
 
 
-def _get_http_client() -> httpx.AsyncClient:
-    """Get or create the HTTP client with current configuration.
+def new_session_client() -> httpx.AsyncClient:
+    """A Canvas client carrying the captured session cookies."""
+    from .config import get_config
 
-    Recreates the client when the running event loop has changed (e.g. after
-    asyncio.run() closes one loop and mcp.run() starts a new one).  The stale
-    client's internal anyio/asyncio connection-pool primitives are tied to the
-    closed loop and will raise "Event loop is closed" on the first use.
-
-    A weakref to the creating loop is stored so that when the old loop is
-    garbage-collected (as asyncio.run() does), the weakref goes dead and we
-    detect the loop change reliably without relying on object id() reuse.
-    """
-    global http_client, _http_client_loop_ref
-    try:
-        current_loop: asyncio.AbstractEventLoop | None = asyncio.get_running_loop()
-    except RuntimeError:
-        current_loop = None
-
-    stored_loop = _http_client_loop_ref() if _http_client_loop_ref is not None else None
-
-    if http_client is not None and (
-        http_client.is_closed
-        or (current_loop is not None and stored_loop is not current_loop)
-    ):
-        http_client = None
-        _http_client_loop_ref = None
-
-    if http_client is None:
-        from .config import get_config
-        config = get_config()
-        http_client = httpx.AsyncClient(
-            headers=_canvas_auth_headers(config.canvas_api_token),
-            timeout=config.api_timeout
-        )
-        _http_client_loop_ref = weakref.ref(current_loop) if current_loop is not None else None
-    return http_client
+    config = get_config()
+    session = load_session()
+    return httpx.AsyncClient(
+        cookies=dict(session.cookies) if session is not None else {},
+        headers=_session_headers(),
+        timeout=config.api_timeout,
+        follow_redirects=False,
+    )
 
 
 async def cleanup_http_client() -> None:
-    """Close the HTTP client and release resources."""
-    global http_client, _http_client_loop_ref
-    client = http_client
-    http_client = None
-    _http_client_loop_ref = None
-    if client is not None:
-        await client.aclose()
+    """Compatibility no-op: clients are created per request now."""
+    return None
 
 
 @asynccontextmanager
 async def canvas_authenticated_client() -> AsyncIterator[httpx.AsyncClient]:
-    """Yield a Canvas-authenticated httpx client for the current context.
-
-    Resolution, fail-closed:
-    - Per-request credentials present (HTTP mode) -> a fresh client with the
-      caller's token.
-    - No per-request credentials but an HTTP request is active -> raise
-      PermissionError (never fall back to the server's own token).
-    - Otherwise (stdio mode) -> the shared global client (env-based token).
-    """
-    from .config import get_config
-
-    req_creds = get_request_credentials()
-    if req_creds:
-        config = get_config()
-        async with httpx.AsyncClient(
-            headers=_canvas_auth_headers(req_creds.api_token),
-            timeout=config.api_timeout,
-        ) as client:
-            yield client
-        return
-
-    if is_http_request_active():
-        raise PermissionError("Canvas token required for HTTP request")
-
-    yield _get_http_client()
+    """Yield a client authenticated with the student's Canvas session cookie."""
+    session, reason = await ensure_session()
+    if session is None:
+        raise PermissionError(reason or "No Canvas session available.")
+    async with new_session_client() as client:
+        yield client
 
 
 async def make_canvas_request(
@@ -431,8 +412,11 @@ async def make_canvas_request(
 
     config = get_config()
 
-    # Check for per-request credentials (HTTP transport mode)
-    req_creds = get_request_credentials()
+    # A browser session is the only credential. ensure_session() reuses the
+    # stored one, or opens the Chrome login window when there is none.
+    session, session_reason = await ensure_session()
+    if session is None:
+        return {"error": session_reason or "No Canvas session available."}
 
     # Ensure the endpoint starts with a slash
     if not endpoint.startswith('/'):
@@ -462,35 +446,14 @@ async def make_canvas_request(
     if api_root not in (API_ROOT_REST, API_ROOT_QUIZ):
         return {"error": f"Unsupported api_root: {api_root}"}
 
-    if req_creds:
-        # Per-request client with user's credentials (HTTP mode)
-        client = httpx.AsyncClient(
-            headers=_canvas_auth_headers(req_creds.api_token),
-            timeout=config.api_timeout,
-        )
-        try:
-            base_url = _resolve_canvas_api_root(req_creds.api_url.rstrip('/'), api_root)
-        except ValueError as exc:
-            await client.aclose()
-            return {"error": str(exc)}
-        url = f"{base_url}{endpoint}"
-        _close_client = True
-    elif is_http_request_active():
-        # HTTP request without a per-request token: fail closed. Never fall
-        # back to the server's own credentials (would mis-attribute actions).
-        log_warning(
-            "Blocked Canvas API request without per-request Canvas token",
-            endpoint=sanitize_url(endpoint),
-        )
-        return {"error": "Canvas token required for HTTP request"}
-    else:
-        # Shared client is selected immediately before dispatch (stdio mode).
-        try:
-            base_url = _resolve_canvas_api_root(config.canvas_api_url.rstrip('/'), api_root)
-        except ValueError as exc:
-            return {"error": str(exc)}
-        url = f"{base_url}{endpoint}"
-        _close_client = False
+    client = new_session_client()
+    _close_client = True
+    try:
+        base_url = _resolve_canvas_api_root(config.canvas_api_url.rstrip('/'), api_root)
+    except ValueError as exc:
+        await client.aclose()
+        return {"error": str(exc)}
+    url = f"{base_url}{endpoint}"
 
     # Own the client before awaiting the semaphore: cancellation while queued
     # must close request-local clients too.
@@ -511,10 +474,6 @@ async def make_canvas_request(
         async with semaphore:
             for attempt in range(MAX_RETRIES + 1):
                 try:
-                    # A semaphore wait or 429 backoff may span a cleanup.
-                    # Select the shared client at dispatch, not before waiting.
-                    if not _close_client:
-                        client = _get_http_client()
                     # Log the request for debugging (if enabled)
                     if config.log_api_requests:
                         retry_info = f" (retry {attempt}/{MAX_RETRIES})" if attempt > 0 else ""
@@ -564,8 +523,19 @@ async def make_canvas_request(
                     else:
                         return {"error": f"Unsupported method: {method}"}
 
+                    # Check for a login redirect BEFORE raise_for_status: a 302
+                    # to /login is an expired session, not an API error.
+                    if _is_login_response(response):
+                        clear_session()
+                        return {
+                            "error": (
+                                "Canvas session expired or was signed out. The next "
+                                "Canvas tool call will open the Chrome login window "
+                                "again so you can sign in."
+                            )
+                        }
                     response.raise_for_status()
-                    result = response.json()
+                    result = _response_json(response)
                     if _pagination is not None:
                         _pagination["current"] = str(response.request.url)
                         _pagination["next"] = response.links.get("next", {}).get("url")

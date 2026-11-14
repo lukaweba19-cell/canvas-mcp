@@ -2,39 +2,39 @@
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 echo "Script directory: $SCRIPT_DIR" >&2
-
-# Print startup message (directed to stderr so it doesn't interfere with JSON)
 echo "Starting Canvas MCP Server..." >&2
 
 # Load environment variables from .env file
 ENV_FILE="$SCRIPT_DIR/.env"
 if [ -f "$ENV_FILE" ]; then
     echo "Loading environment variables from .env file: $ENV_FILE" >&2
-    export $(cat "$ENV_FILE" | grep -v '^#' | xargs)
+    set -a
+    # shellcheck disable=SC1090
+    . "$ENV_FILE"
+    set +a
 else
-    echo "Error: .env file not found at $ENV_FILE. Please create one with CANVAS_API_TOKEN and CANVAS_API_URL" >&2
+    echo "Error: .env file not found at $ENV_FILE. Create one with CANVAS_API_URL (see env.template)." >&2
     exit 1
 fi
 
-# Verify required environment variables are set
-if [ -z "$CANVAS_API_TOKEN" ] || [ -z "$CANVAS_API_URL" ]; then
-    echo "Error: CANVAS_API_TOKEN and CANVAS_API_URL must be set in .env file" >&2
+if [ -z "$CANVAS_API_URL" ]; then
+    echo "Error: CANVAS_API_URL must be set in .env file" >&2
     exit 1
 fi
 
-# Go to the script directory
-cd $SCRIPT_DIR
+# Authentication is a Canvas browser session captured from Chrome. No token is
+# required; the first Canvas tool call opens the login window if needed.
+cd "$SCRIPT_DIR" || exit 1
 echo "Changed directory to: $(pwd)" >&2
 
-# Run the server using the repo-local venv if present (preferred)
+# Default transport is streamable HTTP at http://127.0.0.1:8819/mcp.
 VENV_SERVER="$SCRIPT_DIR/.venv/bin/canvas-mcp-server"
 if [ -x "$VENV_SERVER" ]; then
     echo "Starting server with $VENV_SERVER ..." >&2
-    "$VENV_SERVER"
+    "$VENV_SERVER" "$@"
 else
     echo "Starting server with canvas-mcp-server from PATH..." >&2
-    canvas-mcp-server
+    canvas-mcp-server "$@"
 fi
 
-# Exit message
 echo "Server stopped" >&2

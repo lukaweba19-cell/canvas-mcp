@@ -8,6 +8,7 @@ test can see another's files.
 from __future__ import annotations
 
 import importlib
+import json
 from copy import deepcopy
 from typing import Any
 
@@ -99,7 +100,28 @@ def isolated_workspace(tmp_path, monkeypatch):
     """Fresh student directory, fresh caches, no confirmation state."""
     monkeypatch.setenv("CANVAS_STUDENT_DIR", str(tmp_path / "student"))
     monkeypatch.setenv("CANVAS_API_URL", "https://canvas.example.edu/api/v1")
-    monkeypatch.setenv("CANVAS_API_TOKEN", "test-token")
+    # Authentication is a captured browser session, never a token. Tests write
+    # one so no Chrome window is ever attempted.
+    session_file = tmp_path / "session.json"
+    session_file.write_text(
+        json.dumps(
+            {
+                "base_url": "https://canvas.example.edu/api/v1",
+                "cookies": {
+                    "_canvas_session": "test-session",
+                    "_csrf_token": "test-csrf",
+                },
+                "csrf": "test-csrf",
+                "saved_at": "2026-01-01T00:00:00+00:00",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CANVAS_SESSION_FILE", str(session_file))
+    monkeypatch.setenv("CANVAS_AUTH_NO_BROWSER", "1")
+    from canvas_mcp.core.session import reset_session_cache
+
+    reset_session_cache()
     reset_config()
     cache.course_code_to_id_cache.clear()
     cache.id_to_course_code_cache.clear()
@@ -115,6 +137,9 @@ def isolated_workspace(tmp_path, monkeypatch):
     cache.course_code_to_id_cache.clear()
     cache.id_to_course_code_cache.clear()
     ocr.reset_detection_cache()
+    from canvas_mcp.core.session import reset_session_cache
+
+    reset_session_cache()
     reset_config()
 
 

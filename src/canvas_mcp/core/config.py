@@ -172,8 +172,14 @@ class Config:
     """Configuration class for Canvas MCP server."""
 
     def __init__(self) -> None:
-        # Required configuration
-        self.canvas_api_token = os.getenv("CANVAS_API_TOKEN", "")
+        # Required configuration. Authentication is a browser session captured
+        # from Chrome, not an API token (Canvas disables student tokens at many
+        # schools).
+        self.canvas_session_file = os.getenv("CANVAS_SESSION_FILE", "").strip()
+        self.canvas_chrome_profile = os.getenv("CANVAS_CHROME_PROFILE", "").strip()
+        self.canvas_chrome_path = os.getenv("CANVAS_CHROME_PATH", "").strip()
+        self.canvas_login_timeout = _int_env("CANVAS_LOGIN_TIMEOUT", 180)
+        self.canvas_auth_no_browser = _bool_env("CANVAS_AUTH_NO_BROWSER", False)
         # Keep the configured (pre-normalization) value so validate_config()
         # can report the normalization delta from the same read that produced
         # canvas_api_url. Whitespace-trimmed, matching the normalizer's input.
@@ -205,18 +211,6 @@ class Config:
         self.log_access_events = _bool_env("LOG_ACCESS_EVENTS", False)
         self.log_execution_events = _bool_env("LOG_EXECUTION_EVENTS", False)
         self.audit_log_dir = os.getenv("AUDIT_LOG_DIR", "")
-
-        # HTTP access-key gate (v1, multi-user). Comma- or whitespace-separated
-        # list of accepted keys; an HTTP caller must present a matching
-        # X-MCP-Access-Key header. Empty disables the gate (rely on external
-        # auth). stdio mode ignores this entirely.
-        self.mcp_access_keys = _parse_keys(os.getenv("MCP_ACCESS_KEYS", ""))
-
-        # Secure-by-default: in HTTP mode, an unconfigured key gate makes the
-        # server exit unless the operator EXPLICITLY opts into unauthenticated
-        # mode (i.e. external auth such as Entra/Easy Auth fronts the endpoint).
-        # This makes "fail open" impossible by omission — only by declaration.
-        self.mcp_allow_unauthenticated = _bool_env("MCP_ALLOW_UNAUTHENTICATED", False)
 
         # Optional metadata        # Optional metadata
         self.institution_name = os.getenv("INSTITUTION_NAME", "")
@@ -275,13 +269,9 @@ def reset_config() -> None:
     entry from a prior parse would produce a warning inconsistent with the
     rebuilt configuration's environment.
 
-    Scope: this resets the config singleton only. Derived state built from
-    config elsewhere is **not** reset here — notably the stdio HTTP client in
-    ``core.client``, which captures the ``Authorization`` token at creation and
-    is reused until its event loop closes. A caller rotating ``CANVAS_API_TOKEN``
-    at runtime must also ``await cleanup_http_client()`` so the next request
-    rebuilds the client with the new credentials. (Tests mock the request layer,
-    and HTTP-transport mode uses per-request clients, so neither is affected.)
+    Scope: this resets the config singleton only. The browser session is
+    resolved lazily by ``core.session``, so a caller that changes
+    ``CANVAS_SESSION_FILE`` must also call ``core.session.reset_session_cache()``.
     """
     global _config
     _config = None
@@ -306,11 +296,6 @@ def validate_config() -> bool:
         "MCP_BIND_PORT": "MCP uses stdio transport and does not bind network sockets",
         "FIREWALL_HINT": "firewall hints are documentation-only",
     }
-
-    if not config.canvas_api_token:
-        log_error("CANVAS_API_TOKEN environment variable is required")
-        log_error("Please set CANVAS_API_TOKEN in your .env file")
-        return False
 
     if not config.canvas_api_url:
         log_error("CANVAS_API_URL environment variable is required")

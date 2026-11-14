@@ -40,6 +40,7 @@ dependencies = [
     "pillow>=10",
     "xlrd>=2,<3",
     "legacy-doc>=0.2",
+    "websockets>=12,<16",
 ]
 
 
