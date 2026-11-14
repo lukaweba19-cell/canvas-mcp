@@ -58,9 +58,17 @@ you which files are readable, then `read_course_material` +
   `full_text` off for a section index of a long deck; add `max_chars` to raise
   the budget. Long files stop at the first section that does not fit and the
   note counts the unread slides/pages by name.
+- A `.zip` that contains a Rails app reads as a project, not as source: one
+  section each for routes (expanded `resources`, nesting, `namespace`/`scope`,
+  `member`/`collection`), controllers with their public actions, models with
+  associations and validations, views/layouts per controller, `db/schema.rb`
+  tables with columns and indexes, migrations, and the Rails version plus
+  database adapter. Everything is bounded, and a partial app says which pieces
+  are missing. A zip with no Rails project is refused with that reason — do not
+  present it as an empty file.
 - `download_course_file(course_identifier, file_id)` — only for a file this
-  server cannot read (e.g. an archive), and only on a local stdio server; it
-  writes to the server's disk.
+  server cannot read, and only on a local stdio server; it writes to the
+  server's disk.
 
 A `NOT readable` status is information, not a failure: say what it is and what
 would make it readable (conversion, a transcript, a better scan).

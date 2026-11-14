@@ -138,4 +138,5 @@ dev = [
     # PyYAML is declared directly rather than relied on transitively.
     "pyyaml>=6.0",
     "xlwt>=1.3,<2",
+    "python-pptx>=0.6",
 ]

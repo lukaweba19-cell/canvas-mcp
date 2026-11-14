@@ -6,6 +6,9 @@ are usually the professor's own explanation of what matters) once, and caches
 the result so repeat reads cost nothing.
 
 Formats:
+- ZIP               -> a Rails project described as routes, controllers, models,
+                       views, schema and migrations (bounded); other archives
+                       are named as not readable rather than parsed blindly
 - DOC               -> the document, via legacy-doc's piece-table parser
 - XLS               -> one section per sheet, via xlrd
 - PPT               -> converted to PPTX with a local LibreOffice, then read
@@ -44,7 +47,7 @@ from xml.etree import ElementTree
 import xlrd
 from pypdf import PdfReader
 
-from . import convert, ocr
+from . import convert, ocr, rails
 
 try:  # a hard dependency; a broken install must degrade to a clear message
     from legacy_doc import extract_text as _legacy_doc_text
@@ -78,6 +81,8 @@ _READABLE_SUFFIXES = {
     ".pdf", ".pptx", ".pptm", ".docx", ".xlsx", ".xlsm", ".ipynb",
     # Legacy Office formats the readers below handle directly or via LibreOffice.
     ".doc", ".xls", ".ppt",
+    # A course zip is read when it holds a Rails project.
+    ".zip",
     ".html", ".htm", ".txt", ".md", ".markdown", ".csv", ".json",
     ".py", ".js", ".ts", ".java", ".c", ".cpp", ".rb", ".go", ".rs",
     # Ruby/Rails course files: views, Rake tasks, gemspecs and rackups are source.
@@ -285,7 +290,8 @@ def _unsupported_detail(filename: str) -> str:
     suffix = Path(filename).suffix.lower().lstrip(".")
     return (
         f"'{suffix or 'no extension'}' has no text representation "
-        "(audio, video, image or archive)"
+        "(audio, video, image or archive) — for a lecture video, look for its "
+        "transcript (.vtt/.srt) on the course files page"
     )
 
 
@@ -301,7 +307,13 @@ def status_from_parts(
 
     joined = " ".join(warnings)
     if _UNSUPPORTED_WARNING.search(joined):
-        return ContentStatus(False, "unsupported", _unsupported_detail(filename))
+        # Keep the specific reason when the reader gave one (e.g. a zip with no
+        # Rails project), instead of a generic "audio, video, image or archive".
+        detail = next(
+            (warning for warning in warnings if _UNSUPPORTED_WARNING.search(warning)),
+            _unsupported_detail(filename),
+        )
+        return ContentStatus(False, "unsupported", detail)
     if _TOO_LARGE_WARNING.search(joined):
         return ContentStatus(
             False,
@@ -334,9 +346,13 @@ def status_from_parts(
         return ContentStatus(
             False,
             "image_only",
-            "every page/slide is an image with no text layer; " + _ocr_hint(),
+            "every page/slide is an image with no text layer; "
+            + _ocr_hint()
+            + " — ask for a clearer scan or a caption/transcript",
         )
-    return ContentStatus(False, "empty", "the file contains no text")
+    return ContentStatus(
+        False, "empty", "the file contains no text — check it uploaded correctly"
+    )
 
 
 def status_for(filename: str, record: dict | None = None) -> ContentStatus:
@@ -636,6 +652,20 @@ def _extract_doc(data: bytes) -> tuple[list[Section], list[str]]:
     return [Section("Document", cleaned)], []
 
 
+def _extract_zip(data: bytes) -> tuple[list[Section], list[str]]:
+    """A course zip is read when it is a Rails project; otherwise it says so."""
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            if any(info.flag_bits & 0x1 for info in archive.infolist()):
+                return [], [
+                    "This zip is not a readable text format: it is password-protected."
+                ]
+            described, warnings = rails.describe_zip(archive)
+    except zipfile.BadZipFile:
+        return [], ["File is not a valid zip archive."]
+    return [Section(label, text) for label, text in described], warnings
+
+
 def _extract_ppt(data: bytes) -> tuple[list[Section], list[str]]:
     """PowerPoint 97-2003 decks: LibreOffice converts them to PPTX first."""
     converted, error = convert.convert_legacy_binary(data, ".ppt", ".pptx")
@@ -912,6 +942,8 @@ def extract_bytes(filename: str, data: bytes) -> Extracted:
             sections, warnings = _extract_xlsx(data)
         elif suffix == ".ipynb":
             sections, warnings = _extract_ipynb(data)
+        elif suffix == ".zip":
+            sections, warnings = _extract_zip(data)
         elif suffix in _TRANSCRIPT_SUFFIXES:
             decoded = _decode_text(data)
             if decoded is None:
@@ -934,10 +966,10 @@ def extract_bytes(filename: str, data: bytes) -> Extracted:
             return Extracted(
                 name, kind,
                 warnings=[
-                    f"'{suffix or 'no extension'}' is not a readable text format. "
-                    "Images, audio and video cannot be read as text. If this file "
-                    "belongs to a Panopto/Kaltura/YouTube item, look for a "
-                    "transcript or captions file (.vtt/.srt) in the course files."
+                    f"'{suffix.lstrip('.') or 'no extension'}' is not a readable "
+                    "text format. Images, audio and video cannot be read as text. "
+                    "If this file belongs to a Panopto/Kaltura/YouTube item, look "
+                    "for a transcript or captions file (.vtt/.srt) in the course files."
                 ],
             )
     except zipfile.BadZipFile:

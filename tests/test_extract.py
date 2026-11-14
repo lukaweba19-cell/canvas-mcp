@@ -9,6 +9,7 @@ from fixtures import (
     build_landscape_prose_pdf,
     build_legacy_office,
     build_pptx,
+    build_real_pptx,
     build_slide_pdf,
     build_text_pdf,
     build_vtt,
@@ -66,6 +67,23 @@ def test_pptx_extracts_slides_and_speaker_notes():
     assert "(speaker notes) This will be on the exam" in result.text
     assert [section.label for section in result.sections] == ["Slide 1", "Slide 2"]
     assert result.unreadable == []
+
+
+def test_pptx_written_by_python_pptx_is_read_with_notes():
+    """A deck from a real producer (Drive/Slides exports are the same OOXML)."""
+    deck = build_real_pptx(
+        [
+            ("Depth first search", "Explores one branch fully"),
+            ("Breadth first search", "Uses a queue"),
+        ]
+    )
+    result = extract.extract_bytes("Week 1 - Intro (Google Slides).pptx", deck)
+
+    assert result.status.readable
+    assert [section.label for section in result.sections] == ["Slide 1", "Slide 2"]
+    assert "Depth first search" in result.text
+    assert "(speaker notes) Explores one branch fully" in result.text
+    assert "(speaker notes) Uses a queue" in result.text
 
 
 def test_pptx_corrupt_slide_does_not_lose_the_rest():

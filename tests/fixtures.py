@@ -193,6 +193,30 @@ def build_legacy_office(payload: bytes = b"Word 97 binary body") -> bytes:
     return b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1" + b"\x00" * 16 + payload
 
 
+def build_real_pptx(slides: list[tuple[str, str]]) -> bytes:
+    """A PPTX written by python-pptx itself, like a Drive/Slides export.
+
+    ``slides`` is ``[(body_text, speaker_notes)]``. Using the library that
+    produced the file is the point: the reader must handle real OOXML, not only
+    the hand-built fixture below.
+    """
+    from pptx import Presentation
+    from pptx.util import Inches
+
+    presentation = Presentation()
+    layout = presentation.slide_layouts[1]
+    for body_text, notes in slides:
+        slide = presentation.slides.add_slide(layout)
+        slide.shapes.title.text = body_text
+        slide.placeholders[1].text = body_text
+        if notes:
+            slide.notes_slide.notes_text_frame.text = notes
+        slide.shapes.add_textbox(Inches(1), Inches(5), Inches(4), Inches(1))
+    buffer = _io.BytesIO()
+    presentation.save(buffer)
+    return buffer.getvalue()
+
+
 def build_doc(text: str = "Hello legacy doc") -> bytes:
     """A real Word 97-2003 .doc (OLE + Word piece table), readable as text."""
     from legacy_doc_fixture import build_doc as _build_doc

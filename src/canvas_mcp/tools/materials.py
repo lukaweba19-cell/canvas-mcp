@@ -398,7 +398,9 @@ def register_material_tools(mcp: FastMCP) -> None:
         Legacy Word and Excel binaries (.doc/.xls) are read in process. Legacy
         PowerPoint (.ppt) is converted with a local LibreOffice; when that is not
         installed the call says so and names the install step instead of
-        returning an empty result.
+        returning an empty result. A .zip holding a Rails project is described
+        as routes, controllers, models, views, schema and migrations, bounded.
+        Other archives are refused with the reason.
 
         Downloads the file once, extracts text, caches it in the student
         workspace, and by default returns a section index plus the cache path —
