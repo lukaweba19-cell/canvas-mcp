@@ -49,13 +49,40 @@ COURSE = {
     "name": "Algorithms",
     "course_code": "CS225",
     "syllabus_body": "",
+    "enrollments": [
+        {
+            "type": "student",
+            "computed_current_score": 91.5,
+            "computed_final_score": 91.5,
+            "computed_current_grade": "A",
+        }
+    ],
 }
 COURSE_TWO = {
     "id": 226,
     "name": "Databases",
     "course_code": "CS326",
     "syllabus_body": "",
+    "enrollments": [
+        {
+            "type": "student",
+            "computed_current_score": 88.0,
+            "computed_final_score": 88.0,
+            "computed_current_grade": "B+",
+        }
+    ],
 }
+RUBRIC = [
+    {
+        "id": 1,
+        "description": "Clarity",
+        "points": 5,
+        "ratings": [
+            {"id": 1, "description": "Clear", "points": 5},
+            {"id": 2, "description": "Unclear", "points": 0},
+        ],
+    }
+]
 ASSIGNMENT = {
     "id": 42,
     "name": "Short answer",
@@ -66,6 +93,16 @@ ASSIGNMENT = {
     "allowed_extensions": ["txt"],
     "allowed_attempts": -1,
     "group_category_id": None,
+    "rubric": RUBRIC,
+    "rubric_settings": {"title": "Writing rubric", "points_possible": 5},
+    "submission": {
+        "id": 1,
+        "attempt": 1,
+        "workflow_state": "graded",
+        "submitted_at": "2026-11-01T00:00:00Z",
+        "graded_at": "2026-11-02T00:00:00Z",
+        "score": 8,
+    },
 }
 ASSIGNMENT_TWO = {**ASSIGNMENT, "id": 43, "name": "Second page assignment"}
 FILE_INFO = {
@@ -74,6 +111,75 @@ FILE_INFO = {
     "filename": "lecture.pdf",
     "content-type": "application/pdf",
     "size": len(PDF),
+}
+PAGE = {
+    "page_id": 1,
+    "url": "week-1",
+    "title": "Week 1",
+    "body": "<p>Welcome to algorithms.</p>",
+    "published": True,
+    "front_page": True,
+    "updated_at": "2026-11-01T00:00:00Z",
+}
+MODULE = {
+    "id": 1,
+    "name": "Module 1",
+    "state": "completed",
+    "items": [
+        {
+            "id": 1,
+            "type": "Page",
+            "title": "Week 1",
+            "content_id": 1,
+            "page_url": "week-1",
+        }
+    ],
+}
+TOPIC = {
+    "id": 1,
+    "title": "Introductions",
+    "message": "<p>Say hi</p>",
+    "discussion_subentry_count": 1,
+    "published": True,
+    "posted_at": "2026-11-01T00:00:00Z",
+    "author": {"id": 1, "display_name": "Student"},
+}
+ENTRY = {
+    "id": 1,
+    "user_id": 1,
+    "user_name": "Student",
+    "message": "<p>Hello everyone</p>",
+    "created_at": "2026-11-01T00:00:00Z",
+    "rating_count": 0,
+}
+CONVERSATION = {
+    "id": 1,
+    "subject": "Welcome",
+    "last_message": "Hi there",
+    "workflow_state": "read",
+    "unread_count": 0,
+    "participants": [{"id": 1, "name": "Student"}],
+    "messages": [
+        {
+            "id": 1,
+            "body": "Hi there",
+            "author_id": 1,
+            "created_at": "2026-11-01T00:00:00Z",
+        }
+    ],
+}
+SUBMISSION = {
+    "id": 1,
+    "user_id": 1,
+    "attempt": 1,
+    "workflow_state": "graded",
+    "body": "My answer",
+    "submitted_at": "2026-11-01T00:00:00Z",
+    "graded_at": "2026-11-02T00:00:00Z",
+    "score": 8,
+    "grade": "8",
+    "submission_comments": [{"comment": "Nice work"}],
+    "rubric_assessment": {"1": {"points": 4, "comments": "Clear"}},
 }
 
 
@@ -88,6 +194,7 @@ class FakeState:
         self.submissions: list[dict[str, list[str]]] = []
         self.canvas_base = ""
         self.storage_base = ""
+        self.item_done = False
 
 
 class _CanvasHandler(BaseHTTPRequestHandler):
@@ -108,7 +215,13 @@ class _CanvasHandler(BaseHTTPRequestHandler):
         self.state.requests.append((method, path, headers))
         return headers
 
-    def _send(self, body: bytes, status: int, content_type: str, headers: dict[str, str] | None = None) -> None:
+    def _send(
+        self,
+        body: bytes,
+        status: int,
+        content_type: str,
+        headers: dict[str, str] | None = None,
+    ) -> None:
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
@@ -117,7 +230,9 @@ class _CanvasHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _json(self, payload, status: int = 200, headers: dict[str, str] | None = None) -> None:
+    def _json(
+        self, payload, status: int = 200, headers: dict[str, str] | None = None
+    ) -> None:
         body = b"while(1);" + json.dumps(payload).encode()
         self._send(body, status, "application/json", headers)
 
@@ -130,7 +245,10 @@ class _CanvasHandler(BaseHTTPRequestHandler):
             if "=" in part:
                 key, value = part.strip().split("=", 1)
                 cookies[key] = value
-        return not self.state.reject and cookies.get("_canvas_session") == self.state.cookie
+        return (
+            not self.state.reject
+            and cookies.get("_canvas_session") == self.state.cookie
+        )
 
     def do_GET(self) -> None:  # noqa: N802 - stdlib handler naming
         path = urlsplit(self.path).path
@@ -158,7 +276,7 @@ class _CanvasHandler(BaseHTTPRequestHandler):
             page = query.get("page", ["1"])[0]
             if page == "1":
                 link = (
-                    f'<{self.state.canvas_base}/api/v1/courses/225/assignments'
+                    f"<{self.state.canvas_base}/api/v1/courses/225/assignments"
                     f'?page=2>; rel="next"'
                 )
                 self._json([ASSIGNMENT], headers={"Link": link})
@@ -166,45 +284,185 @@ class _CanvasHandler(BaseHTTPRequestHandler):
                 self._json([ASSIGNMENT_TWO])
             return
 
+        if path == "/api/v1/courses/226/assignments":
+            self._json([])
+            return
+
         if path == "/api/v1/courses/225/assignments/42":
             self._json(ASSIGNMENT)
             return
+        if path == "/api/v1/courses/225/assignments/43":
+            self._json(ASSIGNMENT_TWO)
+            return
 
         if path == "/api/v1/courses/225/pages":
+            self._json([PAGE])
+            return
+
+        if path in ("/api/v1/courses/225/pages/week-1", "/api/v1/courses/225/pages/1"):
+            self._json(PAGE)
+            return
+
+        if path == "/api/v1/courses/225/front_page":
+            self._json(PAGE)
+            return
+
+        if path == "/api/v1/courses/225/modules":
+            self._json([MODULE])
+            return
+
+        if path == "/api/v1/courses/225/modules/1":
+            self._json(MODULE)
+            return
+
+        module_item = {
+            "id": 1,
+            "type": "Page",
+            "title": "Week 1",
+            "content_id": 1,
+            "page_url": "week-1",
+            "completion_requirement": {
+                "type": "must_mark_done",
+                "completed": self.state.item_done,
+            },
+        }
+        if path == "/api/v1/courses/225/modules/1/items":
+            self._json([module_item])
+            return
+        if path == "/api/v1/courses/225/modules/1/items/1":
+            self._json(module_item)
+            return
+
+        if path == "/api/v1/courses/225/discussion_topics":
+            self._json([TOPIC])
+            return
+        if path == "/api/v1/courses/225/discussion_topics/1":
+            self._json(TOPIC)
+            return
+        if path == "/api/v1/courses/225/discussion_topics/1/entries":
+            self._json([ENTRY])
+            return
+        if path == "/api/v1/courses/225/discussion_topics/1/entries/1/replies":
+            self._json([{**ENTRY, "id": 2, "message": "<p>A reply</p>"}])
+            return
+        if path == "/api/v1/courses/225/discussion_topics/1/entry_list":
+            self._json([ENTRY])
+            return
+        if path == "/api/v1/courses/225/discussion_topics/1/view":
+            self._json(
+                {
+                    "participants": [{"id": 1, "display_name": "Student"}],
+                    "unread_entries": [],
+                    "entry_ratings": {},
+                }
+            )
+            return
+
+        if path == "/api/v1/conversations":
+            self._json([CONVERSATION])
+            return
+        if path == "/api/v1/conversations/unread_count":
+            self._json({"unread_count": 0})
+            return
+        if path == "/api/v1/conversations/1":
+            self._json(CONVERSATION)
+            return
+
+        if path == "/api/v1/courses/225/assignments/42/submissions/1":
+            self._json(SUBMISSION)
+            return
+        if path == "/api/v1/courses/225/rubrics/1":
+            self._json(
+                {
+                    "id": 1,
+                    "title": "Writing rubric",
+                    "data": RUBRIC,
+                    "criteria": RUBRIC,
+                    "assessments": [],
+                    "associations": [],
+                }
+            )
+            return
+
+        if path == "/api/v1/users/self":
+            self._json({"id": 1, "name": "Student", "login_id": "student@example.edu"})
+            return
+        if path == "/api/v1/users/self/profile":
+            self._json(
+                {
+                    "id": 1,
+                    "name": "Student",
+                    "short_name": "Student",
+                    "login_id": "student@example.edu",
+                    "primary_email": "student@example.edu",
+                }
+            )
+            return
+
+        if path == "/api/v1/planner/items":
             self._json(
                 [
                     {
-                        "title": "Week 1",
-                        "published": True,
-                        "front_page": True,
-                        "updated_at": "2026-11-01T00:00:00Z",
+                        "course_id": 225,
+                        "plannable_type": "assignment",
+                        "plannable_id": 42,
+                        "plannable_date": "2026-11-20T00:00:00Z",
+                        "plannable": {
+                            "id": 42,
+                            "title": "Short answer",
+                            "due_at": "2026-11-20T00:00:00Z",
+                            "points_possible": 10,
+                        },
+                        "submissions": {"submitted": False},
                     }
                 ]
             )
             return
 
-        if path == "/api/v1/courses/225/modules":
+        if path == "/api/v1/users/self/todo":
+            self._json(
+                [
+                    {
+                        "type": "submitting",
+                        "course_id": 225,
+                        "assignment": {
+                            "id": 42,
+                            "name": "Short answer",
+                            "due_at": "2026-11-20T00:00:00Z",
+                        },
+                    }
+                ]
+            )
+            return
+
+        if path == "/api/v1/courses/225/assignment_groups":
             self._json(
                 [
                     {
                         "id": 1,
-                        "name": "Module 1",
-                        "state": "completed",
-                        "items": [
-                            {
-                                "type": "Page",
-                                "title": "Week 1",
-                                "content_id": 1,
-                            }
-                        ],
+                        "name": "Homework",
+                        "group_weight": 100,
+                        "assignments": [ASSIGNMENT],
                     }
                 ]
             )
             return
 
-        if path == "/api/v1/courses/225/modules/1/items":
+        if path == "/api/v1/courses/225/assignments/43/peer_reviews":
+            self._json([])
+            return
+
+        if path == "/api/v1/courses/225/assignments/42/peer_reviews":
             self._json(
-                [{"type": "Page", "title": "Week 1", "content_id": 1}]
+                [
+                    {
+                        "id": 1,
+                        "assessor_id": 1,
+                        "asset_id": 42,
+                        "workflow_state": "assigned",
+                        "user": {"id": 1, "name": "Student"},
+                    }
+                ]
             )
             return
 
@@ -216,8 +474,11 @@ class _CanvasHandler(BaseHTTPRequestHandler):
             self._json([FILE_INFO])
             return
 
-        if path == "/api/v1/courses/225/assignments/42/submissions/self":
-            self._json({"attempt": 0, "workflow_state": "unsubmitted"})
+        if path in (
+            "/api/v1/courses/225/assignments/42/submissions/self",
+            "/api/v1/courses/225/assignments/43/submissions/self",
+        ):
+            self._json(SUBMISSION)
             return
 
         if path == "/api/v1/courses/225/files/501":
@@ -282,7 +543,50 @@ class _CanvasHandler(BaseHTTPRequestHandler):
             )
             return
 
+        if path == "/api/v1/courses/225/discussion_topics/1/entries":
+            self._json({**ENTRY, "id": 3, "message": "Hello everyone"})
+            return
+        if path == "/api/v1/courses/225/discussion_topics/1/entries/1/replies":
+            self._json({**ENTRY, "id": 4, "message": "A reply"})
+            return
+        if path == "/api/v1/courses/225/rubric_associations":
+            self._json({"id": 1})
+            return
+
         self._json({"error": f"unhandled POST {path}"}, status=404)
+
+    def do_PUT(self) -> None:  # noqa: N802 - stdlib handler naming
+        path = urlsplit(self.path).path
+        headers = self._record("PUT", self.path)
+
+        if not self._authorized():
+            self._login()
+            return
+
+        if headers.get("x-csrf-token") != self.state.csrf:
+            self._json({"error": "invalid CSRF token"}, status=403)
+            return
+
+        length = int(self.headers.get("Content-Length", "0"))
+        self.rfile.read(length)
+
+        if path == "/api/v1/courses/225/assignments/42/submissions/self":
+            self._json(
+                {
+                    **SUBMISSION,
+                    "submission_comments": [{"comment": "A comment"}],
+                }
+            )
+            return
+        if path == "/api/v1/courses/225/modules/1/items/1/done":
+            self.state.item_done = True
+            self._json({})
+            return
+        if path == "/api/v1/conversations":
+            self._json({})
+            return
+
+        self._json({"error": f"unhandled PUT {path}"}, status=404)
 
 
 class _StorageHandler(BaseHTTPRequestHandler):
@@ -418,7 +722,10 @@ async def test_every_path_over_real_http_transport(tmp_path):
                 "server never listened; log:\n" + server_log.read_text(errors="replace")
             )
 
-        async with streamable_http_client(f"http://127.0.0.1:{port}/mcp") as (read, write):
+        async with streamable_http_client(f"http://127.0.0.1:{port}/mcp") as (
+            read,
+            write,
+        ):
             async with ClientSession(read, write) as session:
                 await session.initialize()
 
@@ -474,9 +781,9 @@ async def test_every_path_over_real_http_transport(tmp_path):
                 assert "Cookie sessions reach Canvas." in material, material
                 assert "Downloads leave Canvas for storage." in material, material
                 assert state.storage_cookies, "storage was never asked for the file"
-                assert all(cookie == "" for cookie in state.storage_cookies), (
-                    state.storage_cookies
-                )
+                assert all(
+                    cookie == "" for cookie in state.storage_cookies
+                ), state.storage_cookies
 
                 # --- write: text submission, preview then CSRF-protected POST
                 body = "Sessions are cookies, not bearer tokens."
@@ -632,6 +939,357 @@ async def test_every_path_over_real_http_transport(tmp_path):
         # `uv run` wraps the server in a child process; on POSIX, terminate the
         # whole group so no server outlives the test. Windows has no process
         # groups here, so terminating the launcher is the available cleanup.
+        if os.name == "nt":
+            process.terminate()
+            try:
+                process.wait(timeout=15)
+            except subprocess.TimeoutExpired:
+                process.kill()
+        else:
+            try:
+                os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            try:
+                process.wait(timeout=15)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+        log_handle.close()
+        for server, thread in (
+            (canvas_server, canvas_thread),
+            (storage_server, storage_thread),
+        ):
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+
+
+#: Every tool the server registers, with arguments that drive it once. The
+#: registry test below reads tools/list from the running server and fails if
+#: this table and the registry disagree in either direction, so a new tool
+#: cannot be added without being exercised here.
+def _tool_calls(tmp_path: Path) -> dict[str, list[dict]]:
+    download_dir = tmp_path / "downloads"
+    download_dir.mkdir()
+    return {
+        "list_courses": [{}],
+        "get_course_details": [{"course_identifier": 225}],
+        "get_syllabus": [{"course_identifier": 225}],
+        "get_course_content_overview": [{"course_identifier": 225}],
+        "list_pages": [{"course_identifier": 225}],
+        "get_page_content": [{"course_identifier": 225, "page_url_or_id": "week-1"}],
+        "get_page_details": [{"course_identifier": 225, "page_url_or_id": "week-1"}],
+        "get_front_page": [{"course_identifier": 225}],
+        "list_module_items": [{"course_identifier": 225, "module_id": 1}],
+        "list_assignments": [{"course_identifier": 225}],
+        "get_assignment_details": [{"course_identifier": 225, "assignment_id": 42}],
+        "list_discussion_topics": [{"course_identifier": 225}],
+        "list_announcements": [{"course_identifier": 225}],
+        "get_discussion_topic_details": [{"course_identifier": 225, "topic_id": 1}],
+        "list_discussion_entries": [{"course_identifier": 225, "topic_id": 1}],
+        "get_discussion_entry_details": [
+            {"course_identifier": 225, "topic_id": 1, "entry_id": 1}
+        ],
+        "get_discussion_with_replies": [{"course_identifier": 225, "topic_id": 1}],
+        "post_discussion_entry": [
+            {"course_identifier": 225, "topic_id": 1, "message": "Hello everyone"}
+        ],
+        "reply_to_discussion_entry": [
+            {
+                "course_identifier": 225,
+                "topic_id": 1,
+                "entry_id": 1,
+                "message": "A reply",
+            }
+        ],
+        "list_modules": [{"course_identifier": 225}],
+        "get_course_structure": [{"course_identifier": 225}],
+        "download_course_file": [
+            {
+                "course_identifier": 225,
+                "file_id": 501,
+                "save_directory": str(download_dir),
+            }
+        ],
+        "read_course_file": [{"course_identifier": 225, "file_id": 501}],
+        "list_course_files": [{"course_identifier": 225}],
+        "list_conversations": [{}],
+        "get_conversation_details": [{"conversation_id": 1}],
+        "get_unread_count": [{}],
+        "mark_conversations_read": [{"conversation_ids": ["1"]}],
+        "get_rubric": [{"course_identifier": 225, "assignment_id": 42}],
+        "get_rubric_assessment": [
+            {"course_identifier": 225, "assignment_id": 42, "user_id": 1}
+        ],
+        "get_my_assignment_rubric": [{"course_identifier": 225, "assignment_id": 42}],
+        "check_work_against_rubric": [
+            {
+                "course_identifier": 225,
+                "assignment_id": 42,
+                "text": "A clear answer.",
+            }
+        ],
+        "search_canvas_tools": [{"query": "assignment"}],
+        "get_my_enrollments": [{}],
+        "get_my_profile": [{}],
+        "get_my_upcoming_assignments": [{"days": 14}],
+        "get_my_submission_status": [{}],
+        "get_my_course_grades": [{}],
+        "get_my_todo_items": [{}],
+        "get_my_peer_reviews_todo": [{}],
+        "get_my_assignment_brief": [{"course_identifier": 225, "assignment_id": 42}],
+        "get_my_grade_breakdown": [{"course_identifier": 225}],
+        "get_my_week_plan": [{"days": 14}],
+        "get_my_feedback": [{"course_identifier": 225}],
+        "get_my_submission": [{"course_identifier": 225, "assignment_id": 42}],
+        "submit_assignment": [
+            {
+                "course_identifier": 225,
+                "assignment_id": 42,
+                "submission_type": "online_text_entry",
+                "body": "Matrix answer",
+            }
+        ],
+        "comment_on_my_submission": [
+            {
+                "course_identifier": 225,
+                "assignment_id": 42,
+                "comment": "A comment",
+            }
+        ],
+        "mark_module_item_done": [
+            {"course_identifier": 225, "module_id": 1, "item_id": 1}
+        ],
+        "get_course_content_map": [{"course_identifier": 225}],
+        "read_course_material": [
+            {"course_identifier": 225, "file_id": 501, "full_text": True}
+        ],
+        "read_material_section": [
+            {"course_identifier": 225, "file_id": 501, "section": "p.1"}
+        ],
+        "read_page_text": [{"course_identifier": 225, "page_url_or_id": "week-1"}],
+        "build_study_guide": [
+            {"course_identifier": 225, "title": "Guide", "markdown": "# Guide"}
+        ],
+        "update_study_guide": [
+            {
+                "course_identifier": 225,
+                "title": "Guide",
+                "markdown": "More",
+                "mode": "append",
+            }
+        ],
+        "list_study_guides": [{"course_identifier": 225}],
+        "read_study_guide": [{"course_identifier": 225, "title": "Guide"}],
+        "make_practice_test": [
+            {"course_identifier": 225, "title": "Practice", "markdown": "Q1"}
+        ],
+        "start_assignment_work": [{"course_identifier": 225, "assignment_id": 42}],
+        "save_assignment_draft": [
+            {
+                "course_identifier": 225,
+                "assignment_id": 42,
+                "content": "Draft body",
+            }
+        ],
+        "read_assignment_draft": [
+            {"course_identifier": 225, "assignment_id": 42, "version": 0}
+        ],
+        "list_assignment_drafts": [{"course_identifier": 225}],
+        "save_note": [{"title": "Matrix note", "content": "Note body"}],
+        "search_notes": [{"query": "Note"}],
+        "list_notes": [{}],
+        "read_note": [{"note_id": "Matrix"}],
+        "add_work_log_entry": [{"summary": "Did the work"}],
+        "get_my_handoff": [{}],
+        "save_voice_sample": [
+            {
+                "text": "This is my own writing voice and these are my own words in a sample."
+            }
+        ],
+        "check_draft_style": [{"text": "A clear and simple sentence about cookies."}],
+    }
+
+
+#: Tools that intentionally do not touch Canvas: they read or write the local
+#: student workspace. Everything else must produce at least one Canvas request.
+LOCAL_TOOLS = frozenset(
+    {
+        "search_canvas_tools",
+        "read_material_section",
+        "build_study_guide",
+        "update_study_guide",
+        "list_study_guides",
+        "read_study_guide",
+        "make_practice_test",
+        "save_assignment_draft",
+        "read_assignment_draft",
+        "list_assignment_drafts",
+        "save_note",
+        "search_notes",
+        "list_notes",
+        "read_note",
+        "add_work_log_entry",
+        "get_my_handoff",
+        "save_voice_sample",
+        "check_draft_style",
+        # Uses the rubric saved to the workspace by get_my_assignment_rubric.
+        "check_work_against_rubric",
+    }
+)
+
+
+async def test_every_registered_tool_over_real_http_transport(tmp_path):
+    state = FakeState()
+    storage_server, storage_base, storage_thread = _start(_StorageHandler, state)
+    canvas_server, canvas_base, canvas_thread = _start(_CanvasHandler, state)
+    state.canvas_base = canvas_base
+    state.storage_base = storage_base
+
+    session_file = tmp_path / "session.json"
+    _write_session(session_file, canvas_base + "/api/v1", state.cookie, state.csrf)
+
+    port = _free_port()
+    server_log = tmp_path / "server.log"
+    env = dict(os.environ)
+    env.update(
+        {
+            "CANVAS_API_URL": canvas_base + "/api/v1",
+            "CANVAS_SESSION_FILE": str(session_file),
+            "CANVAS_AUTH_NO_BROWSER": "1",
+            "CANVAS_ALLOW_INSECURE_HTTP": "true",
+            "CANVAS_STUDENT_DIR": str(tmp_path / "student"),
+            "STUDENT_WRITE_TOOLS": (
+                "submit_assignment,comment_on_my_submission,mark_module_item_done"
+            ),
+            "LOG_LEVEL": "WARNING",
+        }
+    )
+    log_handle = server_log.open("w")
+    process = subprocess.Popen(
+        [
+            "uv",
+            "run",
+            "canvas-mcp-server",
+            "--transport",
+            "streamable-http",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(port),
+        ],
+        cwd=str(ROOT),
+        env=env,
+        stdout=log_handle,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+    )
+
+    try:
+        if not _wait_for_port(port):
+            raise AssertionError(
+                "server never listened; log:\n" + server_log.read_text(errors="replace")
+            )
+
+        calls = _tool_calls(tmp_path)
+        async with streamable_http_client(f"http://127.0.0.1:{port}/mcp") as (
+            read,
+            write,
+        ):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+
+                registered = {tool.name for tool in (await session.list_tools()).tools}
+                assert registered == set(calls), (
+                    "tool registry and e2e call table differ; "
+                    f"uninvoked={sorted(registered - set(calls))}, "
+                    f"unknown={sorted(set(calls) - registered)}"
+                )
+
+                # Some tools declare IDs as ``str`` only, so send identifiers
+                # as strings; Pydantic coerces them for the ``str | int`` tools.
+                id_keys = {
+                    "course_identifier",
+                    "assignment_id",
+                    "assignment_identifier",
+                    "module_id",
+                    "item_id",
+                    "topic_id",
+                    "entry_id",
+                    "file_id",
+                    "conversation_id",
+                    "user_id",
+                    "rubric_id",
+                }
+
+                def wire(raw_args: dict) -> dict:
+                    return {
+                        key: str(value) if key in id_keys else value
+                        for key, value in raw_args.items()
+                    }
+
+                for name, invocations in calls.items():
+                    before = len(state.requests)
+                    for raw_args in invocations:
+                        args = wire(raw_args)
+                        result = await session.call_tool(name, args)
+                        text = text_of(result)
+                        assert not result.is_error, f"{name}: {text}"
+                        assert "session expired" not in text.lower(), f"{name}: {text}"
+                        assert not text.lstrip().startswith(
+                            ("Error", "❌")
+                        ), f"{name}: {text}"
+
+                        if name == "submit_assignment":
+                            token = _token(text)
+                            done = text_of(
+                                await session.call_tool(
+                                    name, {**args, "confirmation_token": token}
+                                )
+                            )
+                            assert "Submitted." in done, done
+                    made = state.requests[before:]
+                    if name not in LOCAL_TOOLS:
+                        assert made, f"{name} made no Canvas request"
+
+                # Every request in the sweep carried the session cookie and no
+                # bearer header; every write carried the exact CSRF token.
+                assert state.requests
+                for method, path, headers in state.requests:
+                    if "/api/v1/" not in path:
+                        continue
+                    assert "_canvas_session=" in headers.get("cookie", ""), path
+                    assert "authorization" not in headers, path
+                    if method in ("POST", "PUT", "DELETE", "PATCH"):
+                        assert headers.get("x-csrf-token") == state.csrf, path
+
+                # An expired session must surface as the standard error on
+                # EVERY Canvas-backed tool, never as "no courses/files/…".
+                # Restore the stored session before each call (a real expired
+                # login leaves it on disk until the next 302 clears it), then
+                # reject it at the fake so the very first request is a login
+                # redirect.
+                state.reject = True
+                for name in calls:
+                    if name in LOCAL_TOOLS:
+                        continue
+                    _write_session(
+                        session_file, canvas_base + "/api/v1", state.cookie, state.csrf
+                    )
+                    raw_args = dict(calls[name][0])
+                    if name == "read_course_material":
+                        raw_args["refresh"] = True
+                    text = text_of(await session.call_tool(name, wire(raw_args)))
+                    assert "session expired" in text.lower(), f"{name}: {text}"
+                state.reject = False
+
+                # Downloads reached storage with no Canvas cookie.
+                assert state.storage_cookies
+                assert all(cookie == "" for cookie in state.storage_cookies)
+    finally:
         if os.name == "nt":
             process.terminate()
             try:

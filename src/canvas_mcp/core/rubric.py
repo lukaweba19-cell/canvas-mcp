@@ -206,8 +206,17 @@ def _number(value: Any) -> float | None:
 def from_canvas(assignment: dict[str, Any]) -> Rubric:
     """Parse Canvas's structured rubric object from an assignment payload."""
     raw = assignment.get("rubric") or {}
+    # Canvas returns an assignment's attached rubric as a bare list of
+    # criteria; the standalone /rubrics endpoint nests them under "criteria".
+    # Accept both rather than crashing on the common assignment payload.
+    if isinstance(raw, dict):
+        items = raw.get("criteria") or []
+    elif isinstance(raw, list):
+        items = raw
+    else:
+        items = []
     criteria: list[Criterion] = []
-    for item in raw.get("criteria") or []:
+    for item in items:
         if not isinstance(item, dict):
             continue
         description = str(

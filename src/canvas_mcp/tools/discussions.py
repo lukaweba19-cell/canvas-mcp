@@ -497,6 +497,10 @@ def register_shared_discussion_tools(mcp: FastMCP) -> None:
         # Method 1: Try to get entry details from the discussion view endpoint
         entry_response = None
         replies: list[Any] | Any = []
+        # A failed read is not the same as an entry that does not exist. Keep
+        # the last transport error so an expired session is reported instead
+        # of being downgraded to "may not exist or you may lack permission".
+        read_error: str | None = None
 
         try:
             # First try the discussion view endpoint which includes all entries
@@ -504,6 +508,10 @@ def register_shared_discussion_tools(mcp: FastMCP) -> None:
                 "get", f"/courses/{course_id}/discussion_topics/{topic_id}/view"
             )
 
+            if isinstance(view_response, dict) and "error" in view_response:
+                # Keep the FIRST failure: it is the one that saw the session
+                # expire, before clearing it made later calls report "none".
+                read_error = read_error or str(view_response["error"])
             if "error" not in view_response and "view" in view_response:
                 # Find our specific entry in the view
                 for entry in view_response.get("view", []):
@@ -529,6 +537,8 @@ def register_shared_discussion_tools(mcp: FastMCP) -> None:
                     params={"ids[]": entry_id}
                 )
 
+                if isinstance(entry_list_response, dict) and "error" in entry_list_response:
+                    read_error = read_error or str(entry_list_response["error"])
                 if "error" not in entry_list_response and isinstance(entry_list_response, list):
                     if entry_list_response:
                         entry_response = entry_list_response[0]
@@ -549,6 +559,8 @@ def register_shared_discussion_tools(mcp: FastMCP) -> None:
                     {"per_page": 100}
                 )
 
+                if isinstance(all_entries, dict) and "error" in all_entries:
+                    read_error = read_error or str(all_entries["error"])
                 if not isinstance(all_entries, dict) or "error" not in all_entries:
                     for entry in all_entries:
                         if str(entry.get("id")) == str(entry_id):
@@ -566,8 +578,12 @@ def register_shared_discussion_tools(mcp: FastMCP) -> None:
                     entry_id=entry_id
                 )
 
-        # If we still don't have the entry, return error
+        # If we still don't have the entry, return error. An expired session
+        # or other transport failure is the cause when one was reported; only
+        # a genuinely empty successful read means the entry is unavailable.
         if not entry_response:
+            if read_error and "session expired" in read_error.lower():
+                return f"Error: {read_error}"
             return f"Error: Could not find discussion entry {entry_id} in topic {topic_id}. The entry may not exist or you may not have permission to view it."
 
         # Method 4: If we have the entry but no replies yet, try the replies endpoint
