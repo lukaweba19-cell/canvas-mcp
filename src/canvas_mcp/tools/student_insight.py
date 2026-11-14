@@ -394,8 +394,10 @@ def register_student_insight_tools(mcp: FastMCP) -> None:
                 f"/courses/{course_id}/assignments/{aid}/submissions/self",
                 params={"include[]": ["submission_comments", "rubric_assessment"]},
             )
-            if not isinstance(submission, dict) or "error" in submission:
-                continue
+            if not isinstance(submission, dict):
+                return f"Error reading submission {aid}: unexpected response from Canvas"
+            if "error" in submission:
+                return f"Error reading submission {aid}: {submission['error']}"
             assignment = submission.get("assignment") or {}
             name = assignment.get("name", f"Assignment {aid}")
             lines.append(

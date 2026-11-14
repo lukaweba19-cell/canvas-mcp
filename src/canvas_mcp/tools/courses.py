@@ -375,13 +375,16 @@ def register_course_tools(mcp: FastMCP) -> None:
 
         # Get course details for context
         course_response = await make_canvas_request("get", f"/courses/{course_id}")
-        if "error" not in course_response:
-            course_name = course_response.get("name", "Unknown Course")
-            overview_sections.append(f"Course: {course_name}")
+        if "error" in course_response:
+            return f"Error fetching course: {course_response['error']}"
+        course_name = course_response.get("name", "Unknown Course")
+        overview_sections.append(f"Course: {course_name}")
 
         # Get pages if requested
         if include_pages:
             pages = await fetch_all_paginated_results(f"/courses/{course_id}/pages", {"per_page": 100})
+            if isinstance(pages, dict) and "error" in pages:
+                return f"Error fetching course pages: {pages['error']}"
             if isinstance(pages, list):
                 published_pages = [p for p in pages if p.get("published", False)]
                 unpublished_pages = [p for p in pages if not p.get("published", False)]
@@ -416,6 +419,8 @@ def register_course_tools(mcp: FastMCP) -> None:
         # Get modules if requested
         if include_modules:
             modules = await fetch_all_paginated_results(f"/courses/{course_id}/modules", {"per_page": 100})
+            if isinstance(modules, dict) and "error" in modules:
+                return f"Error fetching course modules: {modules['error']}"
             if isinstance(modules, list):
                 modules_summary = [
                     "\nModules Summary:",
@@ -433,6 +438,8 @@ def register_course_tools(mcp: FastMCP) -> None:
                             f"/courses/{course_id}/modules/{module_id}/items",
                             {"per_page": 100}
                         )
+                        if isinstance(items, dict) and "error" in items:
+                            return f"Error fetching module items: {items['error']}"
                         if isinstance(items, list):
                             total_items += len(items)
                             for item in items:
@@ -491,7 +498,7 @@ def register_course_tools(mcp: FastMCP) -> None:
                 else:
                     overview_sections.append("\nSyllabus Content: No syllabus content found")
             else:
-                overview_sections.append("\nSyllabus Content: Error fetching syllabus")
+                return f"Error fetching syllabus: {course_with_syllabus['error']}"
         # Try to get the course code for display
         course_display = await get_course_code(course_id) or course_identifier
         result = f"Content Overview for Course {course_display}:" + "\n".join(overview_sections)

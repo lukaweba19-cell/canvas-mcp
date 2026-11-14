@@ -34,6 +34,22 @@ MAX_PAGINATION_PAGES = 10000
 API_ROOT_REST: Final = "rest"
 API_ROOT_QUIZ: Final = "quiz"
 
+#: One wording for an expired session, wherever it surfaces (JSON request, file
+#: download, upload confirmation). Callers must never see an empty result
+#: instead: on a cookie-authenticated API an empty list and a signed-out session
+#: look identical unless the login redirect is detected and reported.
+SESSION_EXPIRED_MESSAGE = (
+    "Canvas session expired or was signed out. The next Canvas tool call will "
+    "open the Chrome login window again so you can sign in."
+)
+
+
+class CanvasSessionExpired(RuntimeError):
+    """The stored Canvas session was rejected; a fresh login is required."""
+
+    def __init__(self) -> None:
+        super().__init__(SESSION_EXPIRED_MESSAGE)
+
 
 def _session_headers() -> dict[str, str]:
     """Canvas session headers: CSRF for writes plus a stable User-Agent.
@@ -527,13 +543,7 @@ async def make_canvas_request(
                     # to /login is an expired session, not an API error.
                     if _is_login_response(response):
                         clear_session()
-                        return {
-                            "error": (
-                                "Canvas session expired or was signed out. The next "
-                                "Canvas tool call will open the Chrome login window "
-                                "again so you can sign in."
-                            )
-                        }
+                        return {"error": SESSION_EXPIRED_MESSAGE}
                     response.raise_for_status()
                     result = _response_json(response)
                     if _pagination is not None:
@@ -633,14 +643,17 @@ def is_canvas_origin(url: str) -> bool:
 async def iter_canvas_file_bytes(
     url: str, max_redirects: int = 5
 ) -> AsyncIterator[bytes]:
-    """Yield a Canvas file's bytes, keeping the token on Canvas's own origin.
+    """Yield a Canvas file's bytes, keeping the session on Canvas's own origin.
 
     Canvas file URLs answer with a redirect to inst-fs/S3 whose target carries
-    its own signature. Sending the Canvas bearer token there both leaks the
-    token and breaks the request (S3 rejects dual auth), so the token goes only
-    to the configured Canvas origin — including across redirect hops. Once the
-    download leaves Canvas it continues unauthenticated, as the signature
-    expects.
+    its own signature. Sending the session cookie there would leak the login
+    and break the request, so cookies go only to the configured Canvas origin —
+    including across redirect hops. Once the download leaves Canvas it continues
+    unauthenticated, as the signature expects.
+
+    A Canvas file URL that redirects to the login page is an expired session,
+    not a file. It raises ``CanvasSessionExpired`` rather than downloading the
+    HTML login page as if it were course content.
     """
     from .config import get_config
 
@@ -655,6 +668,9 @@ async def iter_canvas_file_bytes(
         async with client_cm as client:
             async with client.stream("GET", target, follow_redirects=False) as response:
                 if response.is_redirect:
+                    if is_canvas_origin(target) and _is_login_response(response):
+                        clear_session()
+                        raise CanvasSessionExpired()
                     location = response.headers.get("location")
                     if not location:
                         raise RuntimeError(
@@ -662,6 +678,16 @@ async def iter_canvas_file_bytes(
                         )
                     target = str(response.url.join(location))
                     continue
+                if (
+                    is_canvas_origin(target)
+                    and "text/html" in response.headers.get("content-type", "").lower()
+                ):
+                    body = await response.aread()
+                    if looks_like_login(body.decode("utf-8", errors="ignore")):
+                        clear_session()
+                        raise CanvasSessionExpired()
+                    yield body
+                    return
                 response.raise_for_status()
                 async for chunk in response.aiter_bytes(chunk_size=65536):
                     yield chunk
@@ -745,23 +771,26 @@ async def upload_file_to_storage(
                     return {"error": "Redirect without Location header"}
 
                 # The Location comes from the storage host, not from Canvas, and
-                # the confirmation GET carries the student's Canvas token. Only
-                # send it back to Canvas itself; anything else is refused before
-                # a request is made.
+                # the confirmation GET carries the student's Canvas session
+                # cookie. Only send it back to Canvas itself; anything else is
+                # refused before a request is made.
                 absolute = str(response.url.join(redirect_url))
                 if not is_canvas_origin(absolute):
                     return {
                         "error": (
                             "Refused to confirm this upload: the storage host "
-                            "redirected to a different origin, and the Canvas token "
-                            "is only sent to Canvas. Nothing was confirmed."
+                            "redirected to a different origin, and the Canvas "
+                            "session is only sent to Canvas. Nothing was confirmed."
                         )
                     }
                 try:
                     async with canvas_authenticated_client() as canvas_client:
                         confirm_response = await canvas_client.get(absolute)
+                        if _is_login_response(confirm_response):
+                            clear_session()
+                            return {"error": SESSION_EXPIRED_MESSAGE}
                         confirm_response.raise_for_status()
-                        confirmed: dict[str, Any] = confirm_response.json()
+                        confirmed: dict[str, Any] = _response_json(confirm_response)
                         return confirmed
                 except PermissionError as e:
                     return {"error": str(e)}

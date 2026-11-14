@@ -27,7 +27,6 @@ from ..core.client import (
     make_canvas_request,
 )
 from ..core.config import get_config
-from ..core.credentials import is_http_request_active
 from ..core.file_validation import (
     format_file_size,
     sanitize_filename,
@@ -48,8 +47,9 @@ def register_shared_file_tools(mcp: FastMCP) -> None:
     ) -> str:
         """Download a file from a Canvas course to the local filesystem.
 
-        Only available on a local (stdio) server. Use read_course_file to get
-        file content back in the response instead.
+        Saves to the local machine the server runs on (stdio or loopback
+        HTTP). Use read_course_file to get file content back in the response
+        instead.
 
         Use list_course_files or list_module_items to find file IDs.
 
@@ -58,19 +58,6 @@ def register_shared_file_tools(mcp: FastMCP) -> None:
             file_id: Canvas file ID
             save_directory: Local directory to save to (default: system temp dir, must exist)
         """
-        # This tool writes to the *server's* filesystem. On a local stdio server
-        # that is the caller's own machine; on a shared HTTP one it is somebody
-        # else's host, and the caller picks both the destination directory and
-        # (via the Canvas file they choose) the filename and bytes — an arbitrary
-        # write primitive against the service account. There is also no reason a
-        # remote caller would want it: they cannot read what lands there.
-        if is_http_request_active():
-            return (
-                "Error: 'download_course_file' writes to the server's filesystem and is "
-                "only available on a local (stdio) server. On this hosted server, use "
-                "read_course_file instead, which returns the content in the response."
-            )
-
         course_id = await get_course_id(course_identifier)
 
         # Get file metadata from Canvas API
@@ -127,7 +114,7 @@ def register_shared_file_tools(mcp: FastMCP) -> None:
         try:
             total_bytes = 0
             with os.fdopen(fd, 'wb') as f:
-                # Token only to Canvas; the storage redirect is unauthenticated.
+                # Session cookies only to Canvas; the storage redirect is unauthenticated.
                 async for chunk in iter_canvas_file_bytes(download_url):
                     f.write(chunk)
                     total_bytes += len(chunk)

@@ -24,6 +24,7 @@ import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Any
 
 from .logging import log_debug, log_warning
 
@@ -37,7 +38,11 @@ DEVTOOLS_PORT_FILE = "DevToolsActivePort"
 def _windows_candidates() -> list[str]:
     paths: list[str] = []
     try:
-        import winreg  # type: ignore[import-not-found]
+        # Windows-only stdlib module: import dynamically so mypy on other
+        # platforms does not need winreg stubs, and keep its attributes Any.
+        import importlib
+
+        winreg: Any = importlib.import_module("winreg")
 
         for root in (
             winreg.HKEY_CURRENT_USER,
@@ -341,8 +346,8 @@ async def capture_session(force: bool = False) -> tuple[object | None, str]:
             login_url = f"https://{host}/login"
             log_debug("Opening Chrome to capture a Canvas session", url=login_url)
             _launch(chrome, profile, login_url)
-            endpoint = _wait_for_endpoint(profile, timeout=30)
-            if endpoint is None:
+            devtools = _wait_for_endpoint(profile, timeout=30)
+            if devtools is None:
                 return (
                     None,
                     "Chrome was launched but never exposed a debugging port. "

@@ -25,7 +25,6 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-from .credentials import get_request_credentials
 from .write_outcome import WriteOutcome
 
 
@@ -103,17 +102,13 @@ class ConfirmationGuard:
         return self._last_now
 
     def caller_identity(self) -> str:
-        """A stable, non-reversible handle for whoever is calling.
+        """A stable handle for whoever is calling.
 
-        Hosted deployments pass a per-user Canvas token on every request; in
-        stdio mode there is a single user and the constant is fine.
+        This server is single-user: one process holds one Canvas session, and
+        every request acts as that same student. There is no per-request token
+        to distinguish callers with, so the constant is the whole identity.
         """
-        credentials = get_request_credentials()
-        if credentials is None:
-            return "stdio"
-        return hmac.new(
-            self._secret, credentials.api_token.encode(), hashlib.sha256
-        ).hexdigest()
+        return "local"
 
     def fingerprint(self, *parts: str) -> str:
         """Bind a confirmation to the caller plus the exact previewed request.

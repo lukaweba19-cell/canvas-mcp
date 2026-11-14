@@ -274,7 +274,10 @@ def main() -> None:
         log_info(
             f"Starting Canvas MCP server in HTTP mode on {args.host}:{args.port}"
         )
-        log_info("Credentials: per-request via X-Canvas-Token header; Canvas API URL is server-pinned")
+        log_info(
+            "Authentication: captured Canvas browser session; Canvas API URL is "
+            "server-pinned"
+        )
     else:
         log_info(f"Starting Canvas MCP server with API URL: {config.canvas_api_url}")
 

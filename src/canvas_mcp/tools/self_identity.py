@@ -7,8 +7,8 @@ profiles.
 
 They also close the capability gap behind #171: without them an agent that wants
 to know whether the caller is a student in a course has to reach for
-``check_enrollment``, which asks a roster question the caller's own token usually
-cannot answer.
+``check_enrollment``, which asks a roster question the caller's own student
+session usually cannot answer.
 """
 
 from fastmcp import FastMCP
@@ -50,7 +50,7 @@ def register_self_identity_tools(mcp: FastMCP) -> None:
 
         Use this — not check_enrollment — for any question about your own
         enrollment. check_enrollment reads the course roster, which requires
-        roster-admin rights your token probably does not have.
+        roster-admin rights your student account probably does not have.
 
         Args:
             include_concluded: Also include concluded/completed courses
@@ -89,7 +89,7 @@ def register_self_identity_tools(mcp: FastMCP) -> None:
             scope = "" if include_concluded else " active"
             return (
                 f"You have no{scope} course enrollments visible to this Canvas "
-                "token."
+                "session."
             )
 
         lines = []

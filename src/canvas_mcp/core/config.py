@@ -36,7 +36,7 @@ def _normalize_canvas_url(raw: str) -> str:
     Canvas REST endpoints live under ``/api/v1``. Users frequently enter just
     the base host (e.g. ``https://canvas.school.edu``); requests without the
     suffix make Canvas issue a 302 redirect to SSO login, which surfaces as a
-    misleading ``HTTP error: 302`` that looks like a bad token. Canonicalize
+    misleading ``HTTP error: 302`` that looks like a bad session. Canonicalize
     the path to exactly ``/api/v1`` (dropping any extra segments copied from a
     browser, plus stray query strings / fragments) so all of these resolve to
     the same URL:
@@ -105,13 +105,13 @@ def _bool_env(name: str, default: bool) -> bool:
 def validate_canvas_url_scheme() -> bool:
     """Reject a cleartext Canvas origin. Returns False when startup must abort.
 
-    Every Canvas request carries the token in an Authorization header, so an
-    http:// origin puts a credential for student records on the wire for anyone
-    on the path. A warning is not proportionate to that.
+    Every Canvas request carries the student's session cookie, so an http://
+    origin puts a credential for their student records on the wire for anyone
+    on the path. A warning is not proportionate to that; a loopback origin is
+    the only cleartext exception.
 
-    Called from BOTH startup paths. validate_config() runs only in stdio mode,
-    and HTTP mode is where this matters most: the Canvas URL is server-pinned,
-    so one operator typo would leak *every* caller's token, not just their own.
+    Called from BOTH startup paths. The Canvas URL is server-pinned, so a typo
+    would expose the one session this server holds to the wrong host.
     """
     from urllib.parse import urlparse
 
@@ -134,8 +134,9 @@ def validate_canvas_url_scheme() -> bool:
         return True
 
     log_error(
-        "CANVAS_API_URL must use 'https://'. The Canvas API token is sent "
-        "on every request, so a cleartext URL exposes it on the network. "
+        "CANVAS_API_URL must use 'https://'. The Canvas session cookie is sent "
+        "on every request, so a cleartext URL exposes the student's session on "
+        "the network. "
         "For local development against a loopback address only, set "
         "CANVAS_ALLOW_INSECURE_HTTP=true.",
     )

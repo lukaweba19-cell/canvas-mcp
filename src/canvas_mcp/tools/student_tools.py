@@ -260,10 +260,14 @@ def register_student_tools(mcp: FastMCP) -> None:
                     params={"include[]": ["submission"], "per_page": 100}
                 )
 
-                if not isinstance(assignments, dict) or "error" not in assignments:
-                    for assignment in assignments if isinstance(assignments, list) else []:
-                        assignment["_course_name"] = course_name
-                        all_assignments.append(assignment)
+                if isinstance(assignments, dict) and "error" in assignments:
+                    return (
+                        f"Error fetching assignments for course {course_id}: "
+                        f"{assignments['error']}"
+                    )
+                for assignment in assignments if isinstance(assignments, list) else []:
+                    assignment["_course_name"] = course_name
+                    all_assignments.append(assignment)
 
             assignments = all_assignments
 

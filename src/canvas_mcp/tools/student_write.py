@@ -5,7 +5,7 @@ behalf rather than only read. Four properties are load-bearing:
 
 1. **No identity override on the wire.** The submit endpoint
    (``POST /courses/:id/assignments/:id/submissions``) is not structurally
-   self-scoped: Canvas accepts ``submission[user_id]`` there when the token
+   self-scoped: Canvas accepts ``submission[user_id]`` there when the session
    carries grading permission, and a real person can hold mixed student and TA
    enrollments. So rather than trusting the tool profile, every outbound write
    body is checked against an identity-override denylist immediately before it
@@ -47,7 +47,6 @@ from ..core.course_policy import (
     assert_no_identity_override,
     check_student_write_allowed,
 )
-from ..core.credentials import is_http_request_active
 from ..core.dates import format_date
 from ..core.file_validation import (
     DEFAULT_MAX_FILE_SIZE_BYTES,
@@ -227,10 +226,10 @@ def _fingerprint(
     preview and confirm invalidates the token rather than silently consuming a
     second attempt.
 
-    Including the caller identity matters on a hosted server, where each request
-    carries its own Canvas token: without it, a token issued to one student could
-    be redeemed by another whose attempt number happened to match, so the
-    confirmation would no longer authorize the account that saw the preview.
+    The caller identity is constant here: one process holds one Canvas session,
+    so every request acts as the same student. Keeping it in the fingerprint
+    still binds a confirmation to the account that saw the preview, which is the
+    property a future multi-user mode would need without changing the format.
 
     Including the attempt *limit* as well as the count matters because an
     instructor can change ``allowed_attempts`` in between. A preview that said
@@ -363,20 +362,12 @@ def _prepare_files(
 
     Returns ``(files, error)``.
 
-    ``file_paths`` reads the *server's* filesystem, which is correct for a
-    local stdio server and a serious disclosure hole for a shared HTTP one: a
-    remote caller could name any file the server process can read and upload it
-    into their own Canvas submission. It is therefore refused outright over HTTP
-    transport, where callers must inline content instead.
+    ``file_paths`` reads the *server's* filesystem. That is the caller's own
+    machine here: this server is single-user and refuses non-loopback binds,
+    whether it runs over stdio or HTTP. Callers that cannot reach the machine's
+    filesystem should pass ``file_contents`` as base64 instead.
     """
     prepared: list[_PreparedFile] = []
-
-    if file_paths and is_http_request_active():
-        return [], (
-            "Error: 'file_paths' reads files from the server and is only "
-            "available on a local (stdio) server. On this hosted server, pass "
-            "the file with 'file_contents' as base64 instead."
-        )
 
     # Bound the whole request, not just each file. A per-file cap alone lets a
     # caller send an unlimited NUMBER of maximum-size files, and the preview
@@ -1060,6 +1051,12 @@ def register_student_write_tools(mcp: FastMCP) -> None:
 
             # Confirm the write actually landed before claiming success.
             after = await make_canvas_request("get", item_endpoint)
+            if isinstance(after, dict) and "error" in after:
+                return (
+                    "❌ Canvas accepted the mark-done request, but the follow-up "
+                    f"read failed: {after['error']}\n"
+                    "Check the module in Canvas before retrying."
+                )
             confirmed = (
                 isinstance(after, dict)
                 and isinstance(after.get("completion_requirement"), dict)

@@ -409,6 +409,11 @@ def register_workspace_tools(mcp: FastMCP) -> None:
                     "get",
                     f"/courses/{course_id}/assignments/{validated}/submissions/self",
                 )
+                if isinstance(submission, dict) and "error" in submission:
+                    return (
+                        f"Error reading submission {validated}: "
+                        f"{submission['error']}"
+                    )
                 if isinstance(submission, dict) and submission.get("body"):
                     samples.append(extract.html_to_text(submission["body"]))
 

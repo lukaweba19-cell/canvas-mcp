@@ -168,10 +168,10 @@ def _load_cache(path: Path) -> dict[str, Any] | None:
 
 
 async def _download_course_file_bytes(download_url: str) -> tuple[bytes | None, str | None]:
-    """Fetch a Canvas file's bytes using the caller's own credentials."""
+    """Fetch a Canvas file's bytes using the student's captured session."""
     try:
         buffer = bytearray()
-        # The token stays on Canvas's origin; the storage redirect is followed
+        # The session stays on Canvas's origin; the storage redirect is followed
         # without it (see iter_canvas_file_bytes).
         async for chunk in iter_canvas_file_bytes(download_url):
             buffer.extend(chunk)
@@ -322,6 +322,8 @@ def register_material_tools(mcp: FastMCP) -> None:
         files = await fetch_all_paginated_results(
             f"/courses/{course_id}/files", {"per_page": 100}
         )
+        if isinstance(files, dict) and "error" in files:
+            return f"Error listing course files: {files['error']}"
         file_list = files if isinstance(files, list) else []
         files_by_id = {str(entry.get("id")): entry for entry in file_list}
         transcripts = [
@@ -335,8 +337,8 @@ def register_material_tools(mcp: FastMCP) -> None:
         lines = [f"Content map for {course_display}:\n"]
 
         if isinstance(modules, dict) and "error" in modules:
-            lines.append(f"Could not list modules: {modules['error']}")
-        elif not modules:
+            return f"Error listing course modules: {modules['error']}"
+        if not modules:
             lines.append("No modules in this course.")
         else:
             for module in modules:

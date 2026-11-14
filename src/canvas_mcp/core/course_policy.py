@@ -6,7 +6,7 @@ concept of "agent access", so the policy is expressed as a Canvas-native
 artifact that the instructor controls.
 
 Choosing the carrier is the whole security question here, because the policy is
-read using the *student's own token*. The artifact must be one the student
+read using the *student's own session*. The artifact must be one the student
 cannot author or alter, and there is exactly one such option:
 
 **The syllabus.** ``syllabus_body`` is editable only by instructors and admins
@@ -20,7 +20,7 @@ work: ``editing_roles`` describes who may edit a page *now*, not who wrote it.
 In a course where students may create pages, a student can create the policy
 page containing ``agent_writes: allow`` and set it teacher-only in the same
 breath, locking themselves out *after* authoring the content that governs them.
-Authorship cannot be established from a student's own token, so a Page can
+Authorship cannot be established from a student's own session, so a Page can
 never be a trustworthy authorization source here, however it is screened.
 
 Layering holds strictly: ``STUDENT_WRITE_TOOLS`` is the campus-wide operator
@@ -288,7 +288,7 @@ async def get_course_policy(course_id: str | int) -> CoursePolicy:
         )
 
     # A read failure is a property of THIS caller's request, not of the course:
-    # it can mean an expired token, a caller not enrolled, or a transient error.
+    # it can mean an expired session, a caller not enrolled, or a transient error.
     # Caching it under the course id alone would let one bad caller deny writes
     # for every legitimate student in that course for a full deny TTL. So it is
     # never cached; the retry cost is small and falls only on the caller who
@@ -350,9 +350,9 @@ def assert_no_identity_override(data: dict[str, Any]) -> None:
     The submit endpoint (``POST /courses/:id/assignments/:id/submissions``) is
     the one student write path that is *not* structurally self-scoped: Canvas
     accepts ``submission[user_id]`` there to submit on another user's behalf
-    when the token carries grading permission. Since a real person can hold
+    when the session carries grading permission. Since a real person can hold
     mixed student and TA enrollments, the tool profile alone does not guarantee
-    the token lacks that permission.
+    the session lacks that permission.
 
     So the guarantee is enforced on the wire instead: no student write may ever
     carry an identity override. Raising here is deliberate. This is a
